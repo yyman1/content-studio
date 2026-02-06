@@ -12,41 +12,78 @@ export interface SearchOptions {
 }
 
 const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "ContentStudio/1.0 (Multi-Agent Research Pipeline; contact@example.com)";
 
 /**
- * Search the web using DuckDuckGo HTML and parse the results.
- * No API key required.
+ * Search the web using multiple strategies with automatic fallback.
+ * Order: DuckDuckGo HTML → DuckDuckGo Lite → Wikipedia API
  */
 export async function searchWeb(
   query: string,
   options: SearchOptions = {}
 ): Promise<SearchResult[]> {
-  const { maxResults = 10, region = "us-en" } = options;
+  const { maxResults = 10 } = options;
 
-  const params = new URLSearchParams({
-    q: query,
-    kl: region,
-  });
+  // Strategy 1: DuckDuckGo HTML
+  try {
+    const results = await searchDuckDuckGoHtml(query, maxResults);
+    if (results.length > 0) return results;
+  } catch {
+    // Fall through to next strategy
+  }
+
+  // Strategy 2: DuckDuckGo Lite (different endpoint, sometimes less restricted)
+  try {
+    const results = await searchDuckDuckGoLite(query, maxResults);
+    if (results.length > 0) return results;
+  } catch {
+    // Fall through to next strategy
+  }
+
+  // Strategy 3: Wikipedia API (always works from serverless)
+  try {
+    const results = await searchWikipedia(query, maxResults);
+    if (results.length > 0) return results;
+  } catch {
+    // All strategies failed
+  }
+
+  return [];
+}
+
+// ── DuckDuckGo HTML ──────────────────────────────────────────────────────
+
+async function searchDuckDuckGoHtml(
+  query: string,
+  maxResults: number
+): Promise<SearchResult[]> {
+  const params = new URLSearchParams({ q: query, kl: "us-en" });
 
   const response = await fetch(`https://html.duckduckgo.com/html/?${params}`, {
-    method: "GET",
+    method: "POST",
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "text/html",
-      "Accept-Language": "en-US,en;q=0.9",
+      "Content-Type": "application/x-www-form-urlencoded",
     },
+    body: params.toString(),
   });
 
   if (!response.ok) {
-    throw new Error(`Search request failed with status ${response.status}`);
+    throw new Error(`DuckDuckGo HTML: ${response.status}`);
   }
 
   const html = await response.text();
-  return parseSearchResults(html, maxResults);
+
+  // Detect if we got a bot-block page
+  if (html.includes("blocked") || html.includes("bot") || html.length < 1000) {
+    throw new Error("DuckDuckGo HTML: blocked");
+  }
+
+  return parseDuckDuckGoHtml(html, maxResults);
 }
 
-function parseSearchResults(html: string, maxResults: number): SearchResult[] {
+function parseDuckDuckGoHtml(html: string, maxResults: number): SearchResult[] {
   const $ = cheerio.load(html);
   const results: SearchResult[] = [];
 
@@ -62,13 +99,11 @@ function parseSearchResults(html: string, maxResults: number): SearchResult[] {
     let url = titleEl.attr("href") ?? "";
     const snippet = snippetEl.text().trim();
 
-    // DuckDuckGo wraps URLs in a redirect — extract the real URL
     if (url.includes("uddg=")) {
       try {
         const parsed = new URL(url, "https://duckduckgo.com");
         url = decodeURIComponent(parsed.searchParams.get("uddg") ?? url);
       } catch {
-        // If URL parsing fails, try the displayed URL instead
         url = `https://${urlEl.text().trim()}`;
       }
     }
@@ -77,6 +112,169 @@ function parseSearchResults(html: string, maxResults: number): SearchResult[] {
       results.push({ title, url, snippet });
     }
   });
+
+  return results;
+}
+
+// ── DuckDuckGo Lite ──────────────────────────────────────────────────────
+
+async function searchDuckDuckGoLite(
+  query: string,
+  maxResults: number
+): Promise<SearchResult[]> {
+  const params = new URLSearchParams({ q: query });
+
+  const response = await fetch("https://lite.duckduckgo.com/lite/", {
+    method: "POST",
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "text/html",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params.toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`DuckDuckGo Lite: ${response.status}`);
+  }
+
+  const html = await response.text();
+
+  if (html.includes("blocked") || html.length < 500) {
+    throw new Error("DuckDuckGo Lite: blocked");
+  }
+
+  return parseDuckDuckGoLite(html, maxResults);
+}
+
+function parseDuckDuckGoLite(html: string, maxResults: number): SearchResult[] {
+  const $ = cheerio.load(html);
+  const results: SearchResult[] = [];
+
+  // Lite format uses table rows with specific classes
+  const rows = $("table:last-of-type tr");
+
+  let current: Partial<SearchResult> = {};
+
+  rows.each((_i, row) => {
+    if (results.length >= maxResults) return false;
+
+    const $row = $(row);
+
+    // Title/link row
+    const link = $row.find("a.result-link");
+    if (link.length) {
+      current = {
+        title: link.text().trim(),
+        url: link.attr("href") ?? "",
+      };
+      return;
+    }
+
+    // Snippet row
+    const snippet = $row.find("td.result-snippet");
+    if (snippet.length && current.title) {
+      current.snippet = snippet.text().trim();
+      if (current.title && current.url && current.snippet) {
+        results.push(current as SearchResult);
+      }
+      current = {};
+    }
+  });
+
+  return results;
+}
+
+// ── Wikipedia API ────────────────────────────────────────────────────────
+
+async function searchWikipedia(
+  query: string,
+  maxResults: number
+): Promise<SearchResult[]> {
+  const params = new URLSearchParams({
+    action: "query",
+    format: "json",
+    list: "search",
+    srsearch: query,
+    srlimit: String(Math.min(maxResults, 10)),
+    srprop: "snippet|titlesnippet",
+    utf8: "1",
+    origin: "*",
+  });
+
+  const response = await fetch(
+    `https://en.wikipedia.org/w/api.php?${params}`,
+    {
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Wikipedia API: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const searchResults: Array<{ title: string; snippet: string; pageid: number }> =
+    data?.query?.search ?? [];
+
+  // For each result, fetch the extract (first paragraph) for richer content
+  const results: SearchResult[] = [];
+
+  // Batch fetch extracts for all pages
+  if (searchResults.length > 0) {
+    const titles = searchResults.map((r) => r.title).join("|");
+    const extractParams = new URLSearchParams({
+      action: "query",
+      format: "json",
+      titles: titles,
+      prop: "extracts|info",
+      exintro: "1",
+      explaintext: "1",
+      exsentences: "5",
+      inprop: "url",
+      origin: "*",
+    });
+
+    const extractResponse = await fetch(
+      `https://en.wikipedia.org/w/api.php?${extractParams}`,
+      {
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      }
+    );
+
+    if (extractResponse.ok) {
+      const extractData = await extractResponse.json();
+      const pages: Record<
+        string,
+        { title: string; extract?: string; fullurl?: string }
+      > = extractData?.query?.pages ?? {};
+
+      // Build a lookup by title
+      const extractsByTitle = new Map<string, { extract: string; url: string }>();
+      for (const page of Object.values(pages)) {
+        if (page.extract && page.fullurl) {
+          extractsByTitle.set(page.title, {
+            extract: page.extract,
+            url: page.fullurl,
+          });
+        }
+      }
+
+      for (const sr of searchResults) {
+        const ext = extractsByTitle.get(sr.title);
+        // Strip HTML from the search snippet
+        const cleanSnippet = sr.snippet.replace(/<[^>]+>/g, "");
+
+        results.push({
+          title: `${sr.title} - Wikipedia`,
+          url:
+            ext?.url ??
+            `https://en.wikipedia.org/wiki/${encodeURIComponent(sr.title.replace(/ /g, "_"))}`,
+          snippet: ext?.extract ?? cleanSnippet,
+        });
+      }
+    }
+  }
 
   return results;
 }
