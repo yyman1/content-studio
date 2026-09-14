@@ -78,8 +78,8 @@ def cmd_login(_args: argparse.Namespace) -> None:
     print("This is your TP-Link account (the same login used by the Kasa app")
     print("and/or the Tapo app) -- required for most newer devices, even for")
     print("purely local control.")
-    username = input("TP-Link account email: ").strip()
-    password = getpass.getpass("TP-Link account password: ")
+    username = input("TP-Link account email: ").strip().lower()
+    password = getpass.getpass("TP-Link account password: ").strip()
     _save_credentials(username, password)
     print(f"Saved credentials to {CREDENTIALS_PATH}.")
 
