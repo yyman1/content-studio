@@ -145,8 +145,13 @@ def cmd_discover(args: argparse.Namespace) -> None:
         saved[dev.alias] = entry
 
     if args.save:
-        _save_devices(saved)
-        print(f"Saved {len(saved)} device(s) to {DEVICES_PATH}.")
+        existing = _load_devices()
+        existing.update(saved)
+        _save_devices(existing)
+        print(
+            f"Saved {len(saved)} device(s) seen this run "
+            f"({len(existing)} known in total) to {DEVICES_PATH}."
+        )
 
 
 def cmd_list(_args: argparse.Namespace) -> None:
