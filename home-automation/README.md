@@ -1,7 +1,7 @@
 # Home automation scripts
 
-Personal scripts for controlling home devices: an ecobee thermostat, and
-(next) Kasa/Tapo smart plugs.
+Personal scripts for controlling home devices: an ecobee thermostat and
+Kasa/Tapo smart plugs.
 
 ## Ecobee
 
@@ -51,4 +51,42 @@ specific one if you have more than one.
 
 ## Kasa / Tapo
 
-Not built yet -- next step.
+Uses the community [`python-kasa`](https://github.com/python-kasa/python-kasa)
+library, which controls both Kasa- and Tapo-branded devices through one
+API. Most newer devices (all Tapo, and newer Kasa models like the KP125M)
+require your TP-Link account email/password even for local control -- it's
+used to derive a local encryption key; commands still go directly to the
+device on your LAN, not through the cloud.
+
+### Setup
+
+```bash
+cd home-automation
+pip install -r requirements.txt
+python kasa_cli.py login       # only needed if any of your devices require auth
+python kasa_cli.py discover --save
+```
+
+`discover` scans your network (devices must be powered on and connected to
+Wi-Fi) and prints what it finds, including individual outlets on any power
+strip. `--save` writes a name -> IP map to `.secrets/kasa_devices.json` so
+later commands can use the alias you gave the device in the Kasa/Tapo app
+instead of an IP address.
+
+### Usage
+
+```bash
+python kasa_cli.py list                          # show saved devices
+python kasa_cli.py status "Living Room Lamp"
+python kasa_cli.py on "Living Room Lamp"
+python kasa_cli.py off "Living Room Lamp"
+python kasa_cli.py toggle "Living Room Lamp"
+
+# power strips: target one outlet with --child (alias or child_id from discover/status)
+python kasa_cli.py on "Office Strip" --child "Monitor"
+```
+
+If a saved device stops responding, your router probably handed it a new
+DHCP lease -- re-run `discover --save` to refresh `.secrets/kasa_devices.json`
+(or set a DHCP reservation for each device in your router so the IP never
+changes).
