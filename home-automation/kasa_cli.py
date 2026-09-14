@@ -84,30 +84,51 @@ def cmd_login(_args: argparse.Namespace) -> None:
     print(f"Saved credentials to {CREDENTIALS_PATH}.")
 
 
-async def _discover(username: Optional[str], password: Optional[str], target: Optional[str]) -> dict:
+async def _discover(
+    username: Optional[str], password: Optional[str], target: Optional[str]
+) -> tuple[dict, list[tuple[str, str]]]:
     kwargs: dict = {}
     if username and password:
         kwargs["username"] = username
         kwargs["password"] = password
     if target:
         kwargs["target"] = target
-    devices = await Discover.discover(**kwargs)
-    for dev in devices.values():
+    found = await Discover.discover(**kwargs)
+    ok: dict = {}
+    failed: list[tuple[str, str]] = []
+    for host, dev in found.items():
         try:
             await dev.update()
         except Exception as ex:  # noqa: BLE001
-            print(f"  warning: couldn't fully query {dev.host}: {ex}", file=sys.stderr)
-    return devices
+            failed.append((host, str(ex)))
+        else:
+            ok[host] = dev
+    return ok, failed
 
 
 def cmd_discover(args: argparse.Namespace) -> None:
     username, password = _load_credentials()
-    devices = asyncio.run(_discover(username, password, args.target))
+    devices, failed = asyncio.run(_discover(username, password, args.target))
+
+    if failed:
+        print(f"{len(failed)} device(s) responded but couldn't be fully queried:")
+        for host, err in failed:
+            print(f"  {host}: {err}")
+        if not (username and password):
+            print(
+                "These likely need your TP-Link account credentials. Run "
+                "`python kasa_cli.py login`, then re-run `discover --save`.\n"
+            )
+        else:
+            print(
+                "Credentials are already saved, so this is something else "
+                "(wrong password, or an unsupported device/firmware).\n"
+            )
+
     if not devices:
         print(
-            "No devices found. Make sure they're powered on and on this Wi-Fi "
-            "network. If they need credentials, run `python kasa_cli.py login` "
-            "first."
+            "No devices could be fully queried. Make sure they're powered on "
+            "and on this Wi-Fi network."
         )
         return
 
@@ -144,8 +165,16 @@ async def _connect(host: str, username: Optional[str], password: Optional[str]) 
     if username and password:
         kwargs["username"] = username
         kwargs["password"] = password
-    dev = await Discover.discover_single(host, **kwargs)
-    await dev.update()
+    try:
+        dev = await Discover.discover_single(host, **kwargs)
+        await dev.update()
+    except Exception as ex:  # noqa: BLE001
+        hint = (
+            "" if (username and password) else
+            " Run `python kasa_cli.py login` if this device needs TP-Link "
+            "account credentials."
+        )
+        raise SystemExit(f"Couldn't reach/query {host}: {ex}.{hint}") from ex
     return dev
 
 
