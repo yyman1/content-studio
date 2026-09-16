@@ -1,2 +1,6 @@
 requests>=2.31
-python-kasa>=0.7
+# Pinned exact: 0.10.x's KLAP auth handling fails against these devices/
+# account with "Device response did not match our challenge" even with
+# correct credentials, while 0.7.7 works reliably. Don't loosen this
+# without re-verifying against real devices first.
+python-kasa==0.7.7
