@@ -1,6 +1,13 @@
 requests>=2.31
-# Pinned exact: 0.10.x's KLAP auth handling fails against these devices/
-# account with "Device response did not match our challenge" even with
-# correct credentials, while 0.7.7 works reliably. Don't loosen this
-# without re-verifying against real devices first.
+# Pinned to the extensively field-tested version. (A "Server response
+# doesn't match our challenge" KLAP auth failure was originally blamed
+# on a 0.10.x regression, but turned out to be a stale per-device
+# credential hash -- fixed by resetting the TP-Link account password to
+# force devices to resync, unrelated to the library version. Pin kept
+# anyway as a known-good baseline; bump deliberately and re-verify
+# against real devices before loosening.)
 python-kasa==0.7.7
+# zoneinfo on some minimal Linux images (e.g. Raspberry Pi OS Lite) can't
+# find the system tz database at all and needs this as a fallback, or
+# device queries crash with "No time zone found with key EST".
+tzdata
