@@ -43,6 +43,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import sleep as _sleep  # `time` above is datetime.time, not the module
 from typing import Optional
 
 import jewish_calendar as jc
@@ -298,24 +299,44 @@ def desired_state(
     return "off"
 
 
+RETRY_INTERVAL_SECONDS = 60
+MAX_RETRIES = 3  # + the initial attempt = up to 3 extra minutes, kept under the 5-min cron interval
+
+
 def apply_state(name: str, state: str) -> bool:
-    """Issue the kasa_cli.py command for this device and report whether it succeeded,
-    so a failed command isn't recorded as a completed transition (see main())."""
+    """Issue the kasa_cli.py command for this device, retrying a minute apart
+    (Kasa/Tapo devices intermittently drop off wifi and often recover within
+    a couple of minutes) up to MAX_RETRIES times. kasa_cli.py's on/off now
+    confirms the device actually reports the requested power state, not just
+    that the call didn't raise, so a non-zero exit here means genuinely not
+    confirmed. Report whether it succeeded, so a failed command isn't
+    recorded as a completed transition (see main()) -- if it's still down
+    after MAX_RETRIES, the next 5-minute cron cycle keeps retrying it."""
     if state.startswith("dim:"):
         pct = state.split(":", 1)[1]
-        result = subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, pct], check=False)
+        cmd = [sys.executable, str(KASA_CLI), "brightness", name, pct]
     elif state == "on":
         # Devices with a dim rule must be explicitly set to full brightness
         # for "on" -- a plain turn_on() would resume at whatever brightness
         # was last set (e.g. still 15% from last night's dim), not full.
         rule = DEVICE_RULES.get(name)
         if rule and rule.dimmable:
-            result = subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, "100"], check=False)
+            cmd = [sys.executable, str(KASA_CLI), "brightness", name, "100"]
         else:
-            result = subprocess.run([sys.executable, str(KASA_CLI), "on", name], check=False)
+            cmd = [sys.executable, str(KASA_CLI), "on", name]
     else:
-        result = subprocess.run([sys.executable, str(KASA_CLI), "off", name], check=False)
-    return result.returncode == 0
+        cmd = [sys.executable, str(KASA_CLI), "off", name]
+
+    for attempt in range(MAX_RETRIES + 1):
+        if subprocess.run(cmd, check=False).returncode == 0:
+            return True
+        if attempt < MAX_RETRIES:
+            _log(
+                f"{name}: didn't confirm {state!r} (attempt {attempt + 1}/{MAX_RETRIES + 1}), "
+                f"retrying in {RETRY_INTERVAL_SECONDS}s"
+            )
+            _sleep(RETRY_INTERVAL_SECONDS)
+    return False
 
 
 _ZIP = "07666"  # set from --zip in main(); module-level for _evening_desired's sunrise lookup

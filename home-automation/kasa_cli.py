@@ -218,6 +218,11 @@ async def _set_power(host: str, username, password, child_ref: Optional[str], on
     else:
         await target.turn_off()
     await dev.update()
+    if target.is_on != on:
+        raise SystemExit(
+            f"{target.alias!r} did not confirm the requested power state "
+            f"(asked on={on}, still reports on={target.is_on})."
+        )
     return target.alias
 
 
