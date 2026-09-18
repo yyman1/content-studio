@@ -18,12 +18,13 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 import requests
 
 HEBCAL_URL = "https://www.hebcal.com/hebcal"
+ZMANIM_URL = "https://www.hebcal.com/zmanim"
 
 
 @dataclass
@@ -31,6 +32,13 @@ class Span:
     start: datetime  # candle lighting
     end: datetime  # havdalah
     label: str  # nearby holiday title(s), or "Shabbat"
+
+
+@dataclass
+class Events:
+    candles: list[datetime]
+    havdalahs: list[datetime]
+    holidays: list[tuple[datetime, str]]
 
 
 def _fetch_year(zip_code: str, havdalah_minutes: int, year: int) -> dict:
@@ -55,12 +63,17 @@ def _fetch_year(zip_code: str, havdalah_minutes: int, year: int) -> dict:
     return resp.json()
 
 
-def fetch_spans(zip_code: str, havdalah_minutes: int = 42) -> list[Span]:
-    """Return candle-lighting -> havdalah spans for this year and next.
+def fetch_events(zip_code: str, havdalah_minutes: int = 42) -> Events:
+    """Return the raw candle-lighting/havdalah/holiday events for this
+    Gregorian year and next (fetching two years keeps events that
+    straddle a year boundary -- e.g. a candle-lighting on Dec 31 with
+    havdalah in January -- intact).
 
-    Fetching two Gregorian years keeps spans that straddle a year
-    boundary (e.g. a candle-lighting on Dec 31 with havdalah in
-    January) intact.
+    Unlike fetch_spans(), this does NOT collapse multi-day chains into
+    one span -- each individual candle-lighting (e.g. both evenings of
+    a 2-day Yom Tov) is kept separate. Needed for per-evening rules
+    (e.g. "on from an hour before candle-lighting, off at a fixed
+    time") that must fire on every relighting, not just the first.
     """
     this_year = datetime.now().year
     items: list[dict] = []
@@ -80,19 +93,44 @@ def fetch_spans(zip_code: str, havdalah_minutes: int = 42) -> list[Span]:
         elif cat == "holiday":
             holidays.append((dt, item["title"]))
 
+    candles.sort()
+    havdalahs.sort()
+    # Some "holiday" items (e.g. nightly Chanukah candle-lighting) carry a
+    # timezone-aware timestamp while most are date-only (naive, midnight);
+    # sort by date alone to avoid comparing the two directly.
+    holidays.sort(key=lambda h: h[0].date())
+    return Events(candles=candles, havdalahs=havdalahs, holidays=holidays)
+
+
+def fetch_spans(
+    zip_code: str, havdalah_minutes: int = 42, events: Optional[Events] = None
+) -> list[Span]:
+    """Return candle-lighting -> havdalah spans for this year and next.
+
+    Fetching two Gregorian years keeps spans that straddle a year
+    boundary (e.g. a candle-lighting on Dec 31 with havdalah in
+    January) intact.
+
+    Pass a pre-fetched `events` (from fetch_events()) to avoid a
+    redundant network round-trip when the caller already has one.
+    """
+    events = events or fetch_events(zip_code, havdalah_minutes)
+
     # Walk the merged timeline rather than pairing nearest-neighbour: a
     # "candles" event while already inside a span (e.g. Sukkot's second
     # candle-lighting, lit from the existing flame after Shabbat/Sukkot I
     # flows straight into Sukkot II with no havdalah in between) extends
     # the current span instead of starting a new, overlapping one.
-    events = sorted([(c, "candles") for c in candles] + [(h, "havdalah") for h in havdalahs])
+    timeline = sorted(
+        [(c, "candles") for c in events.candles] + [(h, "havdalah") for h in events.havdalahs]
+    )
     spans = []
     span_start: Optional[datetime] = None
-    for dt, kind in events:
+    for dt, kind in timeline:
         if kind == "candles" and span_start is None:
             span_start = dt
         elif kind == "havdalah" and span_start is not None:
-            spans.append(Span(start=span_start, end=dt, label=_label_for(span_start, dt, holidays)))
+            spans.append(Span(start=span_start, end=dt, label=_label_for(span_start, dt, events.holidays)))
             span_start = None
     return spans
 
@@ -108,7 +146,10 @@ def _label_for(start: datetime, end: datetime, holidays: list[tuple[datetime, st
 
 
 def current_status(
-    zip_code: str, havdalah_minutes: int = 42, now: Optional[datetime] = None
+    zip_code: str,
+    havdalah_minutes: int = 42,
+    now: Optional[datetime] = None,
+    spans: Optional[list[Span]] = None,
 ) -> dict:
     """Return the current Shabbat/holiday state.
 
@@ -116,9 +157,12 @@ def current_status(
     a candle-lighting -> havdalah span, otherwise
     {"active": False, "label": ..., "next_start": ...} with the next
     upcoming span, if any is known.
+
+    Pass pre-fetched `spans` (from fetch_spans()) to avoid a redundant
+    network round-trip when the caller already has one.
     """
     now = now or datetime.now().astimezone()
-    spans = fetch_spans(zip_code, havdalah_minutes)
+    spans = spans if spans is not None else fetch_spans(zip_code, havdalah_minutes)
     for span in spans:
         if span.start <= now < span.end:
             return {
@@ -133,6 +177,15 @@ def current_status(
         "label": upcoming.label if upcoming else None,
         "next_start": upcoming.start.isoformat() if upcoming else None,
     }
+
+
+def sunrise(zip_code: str, on_date: date) -> datetime:
+    """Return the sunrise time for the given date at zip_code, via
+    Hebcal's zmanim API (https://www.hebcal.com/home/1663/zmanim-rest-api)."""
+    params = {"cfg": "json", "geo": "zip", "zip": zip_code, "date": on_date.isoformat()}
+    resp = requests.get(ZMANIM_URL, params=params, timeout=15)
+    resp.raise_for_status()
+    return datetime.fromisoformat(resp.json()["times"]["sunrise"])
 
 
 def main() -> None:
