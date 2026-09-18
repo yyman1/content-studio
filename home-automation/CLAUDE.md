@@ -105,8 +105,17 @@ a missed run or a manual override, tracked in
 `shabbat_automation.log` (gitignored).
 
 It's been tested extensively against real Hebcal data with synthetic
-`now` values (see the commit message for `shabbat_automation.py` for
-the three real bugs that testing caught and fixed), but:
+`now` values (see the commit messages for `shabbat_automation.py` for
+the bugs that testing caught and fixed, including a subtle one where a
+stale first-night candle-lighting could win over a fresher second-night
+one once the lookback window was widened enough to span a full
+weekend -- fixed by checking candle events most-recent-first). Per
+household confirmation, `Bathroom Upstairs main` stays fully on all day
+once its 7am trigger fires and dims to 10% at 11pm every night
+regardless (no separate Yom Tov daytime cutoff needed) -- this is
+implemented and tested, not an open question anymore.
+
+Still to do:
 
 1. **Not yet added to cron.** Something like:
    `*/5 * * * * cd ~/content-studio/home-automation && venv/bin/python3 shabbat_automation.py --zip 07666 --havdalah-minutes 42 >> cron.log 2>&1`
@@ -115,13 +124,7 @@ the three real bugs that testing caught and fixed), but:
    `kasa_cli.py on/off/brightness` command against real hardware. Run
    `--dry-run` first, then without it, ideally around an actual
    upcoming candle-lighting/havdalah to watch it work end to end.
-3. **Open question for the household**: `Bathroom Upstairs main` has
-   no `yomtov_off` and no `nightly_cutoff` in the source spec. Once its
-   `yomtov_on: 7am` trigger fires on a Shabbat/Yom Tov day, there's
-   currently nothing to bring it back down to `10% at 11pm` that same
-   night -- it just stays fully on. Flagged, not guessed at. Ask
-   before "fixing" this.
-4. The two devices still resyncing per gotcha #1 (Family Room, Dining
+3. The two devices still resyncing per gotcha #1 (Family Room, Dining
    Room Chandelier) need to actually be reachable for their rules in
    `DEVICE_RULES` to do anything -- check `kasa_cli.py list` shows them
    before trusting a dry run that touches them.
