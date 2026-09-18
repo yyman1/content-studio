@@ -16,6 +16,7 @@ Usage:
     python kasa_cli.py on <name-or-ip> [--child <alias-or-id>]
     python kasa_cli.py off <name-or-ip> [--child <alias-or-id>]
     python kasa_cli.py toggle <name-or-ip> [--child <alias-or-id>]
+    python kasa_cli.py brightness <name-or-ip> <0-100> [--child <alias-or-id>]
 
 Run `discover --save` once (with devices powered on and connected to your
 Wi-Fi) to build a name -> IP map in .secrets/kasa_devices.json, so later
@@ -247,6 +248,23 @@ def cmd_toggle(args: argparse.Namespace) -> None:
     print(f"{alias!r} is now {'on' if is_on else 'off'}.")
 
 
+async def _set_brightness(host: str, username, password, child_ref: Optional[str], percent: int) -> str:
+    dev = await _connect(host, username, password)
+    target = _target(dev, child_ref)
+    await target.set_brightness(percent)
+    await dev.update()
+    return target.alias
+
+
+def cmd_brightness(args: argparse.Namespace) -> None:
+    if not 0 <= args.percent <= 100:
+        raise SystemExit("Brightness percent must be between 0 and 100.")
+    username, password = _load_credentials()
+    host = _resolve_host(args.device)
+    alias = asyncio.run(_set_brightness(host, username, password, args.child, args.percent))
+    print(f"Set {alias!r} brightness to {args.percent}%.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -270,6 +288,12 @@ def main() -> None:
         p.add_argument("device", help="Saved device name or IP address.")
         p.add_argument("--child", help="Outlet alias or child_id, for a power strip.")
         p.set_defaults(func=fn)
+
+    p_bright = sub.add_parser("brightness", help="Set a dimmable device's brightness.")
+    p_bright.add_argument("device", help="Saved device name or IP address.")
+    p_bright.add_argument("percent", type=int, help="Brightness percent, 0-100.")
+    p_bright.add_argument("--child", help="Outlet alias or child_id, for a power strip.")
+    p_bright.set_defaults(func=cmd_brightness)
 
     args = parser.parse_args()
     args.func(args)
