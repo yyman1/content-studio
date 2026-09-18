@@ -32,9 +32,9 @@ meant to drive a Shabbat/holiday lighting routine:
 - **`shabbat_automation.py`** — the actual Shabbat/Yom Tov lighting
   automation, wiring `jewish_calendar.py` + `kasa_cli.py` together per
   the household's written spec (see "Shabbat automation" section
-  below). Built and tested against real Hebcal data, but **not yet
-  scheduled via cron and not yet run against real devices** -- see
-  that section for what's left.
+  below). **Live on cron as of 2026-09-18**, running every 5 minutes --
+  see that section for what's still open (first real-device run hasn't
+  been verified yet).
 
 ## Credentials
 
@@ -78,10 +78,17 @@ here, since the symptoms are misleading).
 
 ## Current state of the device roster
 
-As of last check, 27 of ~29 Kasa/Tapo devices are confirmed working.
-Two ("Family Room", "Dining Room Chandelier") were still resyncing per
-gotcha #1 above — check `python3 kasa_cli.py list` for current status,
-and retry `discover --save` a couple of times if any are still missing.
+All 29 Kasa/Tapo devices are confirmed working as of 2026-09-18,
+including the two ("Family Room", "Dining Room Chandelier") that had
+been resyncing per gotcha #1 above -- they recovered after a few
+`discover --save` retries. `python3 kasa_cli.py list` should show all
+29; if any regress, that gotcha is still the first thing to check.
+
+`kasa_cli.py` also has a `fade` command (steps a dimmable device down
+through brightness levels, then quickly back up to 100%) alongside
+`brightness` -- these were developed in parallel on two different
+sessions (this one and a Pi-local session) and had to be merged by
+hand once; both are intentional, not duplicates to clean up.
 
 ## Shabbat automation — status and what's left
 
@@ -115,19 +122,41 @@ once its 7am trigger fires and dims to 10% at 11pm every night
 regardless (no separate Yom Tov daytime cutoff needed) -- this is
 implemented and tested, not an open question anymore.
 
+There's also a `before_havdalah_hours` rule field (with its own
+`_havdalah_desired()` helper), added for Master Bathroom: it turns on
+N hours before the *actual* havdalah event (not a fixed clock time),
+off at the same `nightly_cutoff` its evening rule already uses. This
+is deliberately keyed off `events.havdalahs` rather than a clock time
+so it tracks the real end of Shabbat/Yom Tov week to week (havdalah
+time changes) instead of drifting. Checked in `desired_state()` right
+after `_yomtov_desired()` and before the evening/candle branch.
+
+Cron entry (live since 2026-09-18):
+```
+*/5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 shabbat_automation.py --zip 07666 --havdalah-minutes 42 >> cron.log 2>&1
+```
+
 Still to do:
 
-1. **Not yet added to cron.** Something like:
-   `*/5 * * * * cd ~/content-studio/home-automation && venv/bin/python3 shabbat_automation.py --zip 07666 --havdalah-minutes 42 >> cron.log 2>&1`
-2. **Not yet run against real devices** -- only tested with synthetic
-   timestamps against real Hebcal data, never actually fired a real
-   `kasa_cli.py on/off/brightness` command against real hardware. Run
-   `--dry-run` first, then without it, ideally around an actual
-   upcoming candle-lighting/havdalah to watch it work end to end.
-3. The two devices still resyncing per gotcha #1 (Family Room, Dining
-   Room Chandelier) need to actually be reachable for their rules in
-   `DEVICE_RULES` to do anything -- check `kasa_cli.py list` shows them
-   before trusting a dry run that touches them.
+1. **First live run against real devices not yet verified end-to-end.**
+   Cron is running every 5 min starting the afternoon of Fri 2026-09-18
+   (candle-lighting 6:41pm that evening, havdalah 7:40pm Sat 9/19) --
+   this is the very first Shabbat it's controlling real hardware, not
+   just synthetic-timestamp dry runs. Check `cron.log` (no tracebacks)
+   and `shabbat_automation.log` (state transitions logged as expected)
+   after it's had a chance to run through a full cycle, and spot-check
+   a few actual devices against the schedule that was emailed out.
+2. An email summarizing the schedule for this specific Shabbat (grouped
+   by the household's original PDF categories: First Floor, Master
+   Bedroom/Bathrooms, Kids Bathroom, Basement, Entryways/Outdoor; two
+   columns, Night vs. Day) was sent 2026-09-18 to confirm the rules
+   read correctly before they ran live. If you're asked to do this
+   again for a future Shabbat/Yom Tov, the pattern is: pull the actual
+   candle-lighting/havdalah times via `jewish_calendar.py`, derive each
+   device's on/off times from its `DeviceRule` (don't hand-copy old
+   numbers -- compute fresh, rules can change), group by the comments
+   in `DEVICE_RULES` (they mirror the PDF's categories), and send via
+   the Gmail MCP tool.
 
 ## Working conventions
 
