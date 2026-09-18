@@ -73,6 +73,10 @@ def _resolve_host(name_or_host: str) -> str:
     devices = _load_devices()
     if name_or_host in devices:
         return devices[name_or_host]["host"]
+    stripped = name_or_host.strip()
+    for name, info in devices.items():
+        if name.strip() == stripped:
+            return info["host"]
     return name_or_host
 
 

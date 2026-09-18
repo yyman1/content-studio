@@ -298,21 +298,24 @@ def desired_state(
     return "off"
 
 
-def apply_state(name: str, state: str) -> None:
+def apply_state(name: str, state: str) -> bool:
+    """Issue the kasa_cli.py command for this device and report whether it succeeded,
+    so a failed command isn't recorded as a completed transition (see main())."""
     if state.startswith("dim:"):
         pct = state.split(":", 1)[1]
-        subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, pct], check=False)
+        result = subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, pct], check=False)
     elif state == "on":
         # Devices with a dim rule must be explicitly set to full brightness
         # for "on" -- a plain turn_on() would resume at whatever brightness
         # was last set (e.g. still 15% from last night's dim), not full.
         rule = DEVICE_RULES.get(name)
         if rule and rule.dimmable:
-            subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, "100"], check=False)
+            result = subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, "100"], check=False)
         else:
-            subprocess.run([sys.executable, str(KASA_CLI), "on", name], check=False)
+            result = subprocess.run([sys.executable, str(KASA_CLI), "on", name], check=False)
     else:
-        subprocess.run([sys.executable, str(KASA_CLI), "off", name], check=False)
+        result = subprocess.run([sys.executable, str(KASA_CLI), "off", name], check=False)
+    return result.returncode == 0
 
 
 _ZIP = "07666"  # set from --zip in main(); module-level for _evening_desired's sunrise lookup
@@ -338,13 +341,16 @@ def main() -> None:
         desired = desired_state(name, rule, now, events, spans)
         previous = state.get(name)
         if desired != previous:
-            changed += 1
             if args.dry_run:
+                changed += 1
                 _log(f"[dry-run] {name}: {previous!r} -> {desired!r}")
-            else:
+                state[name] = desired
+            elif apply_state(name, desired):
+                changed += 1
                 _log(f"{name}: {previous!r} -> {desired!r}")
-                apply_state(name, desired)
-            state[name] = desired
+                state[name] = desired
+            else:
+                _log(f"{name}: {previous!r} -> {desired!r} FAILED, will retry next run")
 
     if changed:
         if not args.dry_run:
