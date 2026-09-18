@@ -29,6 +29,12 @@ meant to drive a Shabbat/holiday lighting routine:
   device control end-to-end (waits for a start time, then
   alternates a device on/off at an interval). Already used
   successfully to confirm the Pi can run unattended scheduled actions.
+- **`shabbat_automation.py`** — the actual Shabbat/Yom Tov lighting
+  automation, wiring `jewish_calendar.py` + `kasa_cli.py` together per
+  the household's written spec (see "Shabbat automation" section
+  below). Built and tested against real Hebcal data, but **not yet
+  scheduled via cron and not yet run against real devices** -- see
+  that section for what's left.
 
 ## Credentials
 
@@ -77,49 +83,48 @@ Two ("Family Room", "Dining Room Chandelier") were still resyncing per
 gotcha #1 above — check `python3 kasa_cli.py list` for current status,
 and retry `discover --save` a couple of times if any are still missing.
 
-## What's NOT built yet — the actual next task
+## Shabbat automation — status and what's left
 
-The Shabbat/holiday automation logic itself does not exist yet. What
-exists is the two building blocks (`jewish_calendar.py` for "is it
-Shabbat/Yom Tov right now, and when's the next transition" +
-`kasa_cli.py` for device control) but nothing wires them together on a
-schedule yet.
+`shabbat_automation.py` implements the household's full written spec
+(a PDF listing every device's rules) as a `DEVICE_RULES` dict, one
+entry per device that needs automation -- anything not in that dict is
+deliberately left alone, since it has an existing schedule that runs
+through the Kasa/Tapo app itself. Each rule is some combination of:
+evening candle-lighting start, a fixed nightly cutoff, a relative
+offset with a cap (e.g. "4 hours after candle-lighting, but by 11pm at
+the latest"), a Yom Tov daytime on/off window, dimming with a sunrise
+cutoff, or "Sukkot only."
 
-The user has grouped their devices into:
-- First Floor areas (Living Room, Bar, Dining Room, Dining Room Dummy,
-  Dining Room Chandelier, Kitchen, Table, Bathroom First Floor, Family
-  Room)
-- Master Bedrooms/bathrooms (Main Bedroom, Primary Lobby, Master
-  Bathroom, Master Bathroom Toilet, Blanket)
-- Kids bathroom (Bathroom Upstairs main, Bathroom Mirror)
-- Basement (Basement, Basement Playroom, Basement Hallway, Basement
-  Steps)
-- Entryways/Outdoor (Front Door, Mudroom Hallway, Mudroom Porch,
-  Backyard overhead light, Back Porch Side Light, Driveway front,
-  Driveway Backyard/Side)
-- Named for a person (Daddy's Light, Ima's Light)
+It's designed to run every 5-10 min via cron rather than at precisely
+timed moments (a one-shot cron entry can be missed if the Pi is busy or
+rebooting; polling just catches up next cycle) and recomputes every
+device's desired state from scratch each run, only issuing a
+`kasa_cli.py` command when it actually changed -- self-healing against
+a missed run or a manual override, tracked in
+`.secrets/shabbat_state.json`. Every check and action is logged to
+`shabbat_automation.log` (gitignored).
 
-**Still needed from the user**: the actual on/off behavior per group (or
-per-device exceptions within a group) at candle-lighting vs. havdalah.
-Ask for this if it hasn't been provided yet before building the
-automation script.
+It's been tested extensively against real Hebcal data with synthetic
+`now` values (see the commit message for `shabbat_automation.py` for
+the three real bugs that testing caught and fixed), but:
 
-Once you have that, build something like a `shabbat_automation.py`
-that:
-- Runs periodically via cron (every 5-10 min is reasonable — candle
-  lighting/havdalah times don't need to-the-second precision, and
-  frequent polling is more robust than a precisely-timed one-shot cron
-  entry that could be missed if the Pi is briefly busy/rebooting)
-- Calls `jewish_calendar.current_status()` to check if we're
-  transitioning into or out of a Shabbat/holiday span
-- Tracks last-applied state in a small local file so it doesn't
-  needlessly re-issue the same on/off commands every poll
-- Calls `kasa_cli.py` (or imports its functions directly) to apply the
-  right action per device group
-- **Logs every check and every action taken, with timestamps**, to a
-  persistent log file — this runs unattended overnight/over Shabbat
-  with nobody watching, so a durable audit trail matters more than for
-  the interactive testing done so far.
+1. **Not yet added to cron.** Something like:
+   `*/5 * * * * cd ~/content-studio/home-automation && venv/bin/python3 shabbat_automation.py --zip 07666 --havdalah-minutes 42 >> cron.log 2>&1`
+2. **Not yet run against real devices** -- only tested with synthetic
+   timestamps against real Hebcal data, never actually fired a real
+   `kasa_cli.py on/off/brightness` command against real hardware. Run
+   `--dry-run` first, then without it, ideally around an actual
+   upcoming candle-lighting/havdalah to watch it work end to end.
+3. **Open question for the household**: `Bathroom Upstairs main` has
+   no `yomtov_off` and no `nightly_cutoff` in the source spec. Once its
+   `yomtov_on: 7am` trigger fires on a Shabbat/Yom Tov day, there's
+   currently nothing to bring it back down to `10% at 11pm` that same
+   night -- it just stays fully on. Flagged, not guessed at. Ask
+   before "fixing" this.
+4. The two devices still resyncing per gotcha #1 (Family Room, Dining
+   Room Chandelier) need to actually be reachable for their rules in
+   `DEVICE_RULES` to do anything -- check `kasa_cli.py list` shows them
+   before trusting a dry run that touches them.
 
 ## Working conventions
 
