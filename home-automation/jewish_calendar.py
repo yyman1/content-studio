@@ -102,14 +102,19 @@ def fetch_events(zip_code: str, havdalah_minutes: int = 42) -> Events:
     return Events(candles=candles, havdalahs=havdalahs, holidays=holidays)
 
 
-def fetch_spans(zip_code: str, havdalah_minutes: int = 42) -> list[Span]:
+def fetch_spans(
+    zip_code: str, havdalah_minutes: int = 42, events: Optional[Events] = None
+) -> list[Span]:
     """Return candle-lighting -> havdalah spans for this year and next.
 
     Fetching two Gregorian years keeps spans that straddle a year
     boundary (e.g. a candle-lighting on Dec 31 with havdalah in
     January) intact.
+
+    Pass a pre-fetched `events` (from fetch_events()) to avoid a
+    redundant network round-trip when the caller already has one.
     """
-    events = fetch_events(zip_code, havdalah_minutes)
+    events = events or fetch_events(zip_code, havdalah_minutes)
 
     # Walk the merged timeline rather than pairing nearest-neighbour: a
     # "candles" event while already inside a span (e.g. Sukkot's second
@@ -141,7 +146,10 @@ def _label_for(start: datetime, end: datetime, holidays: list[tuple[datetime, st
 
 
 def current_status(
-    zip_code: str, havdalah_minutes: int = 42, now: Optional[datetime] = None
+    zip_code: str,
+    havdalah_minutes: int = 42,
+    now: Optional[datetime] = None,
+    spans: Optional[list[Span]] = None,
 ) -> dict:
     """Return the current Shabbat/holiday state.
 
@@ -149,9 +157,12 @@ def current_status(
     a candle-lighting -> havdalah span, otherwise
     {"active": False, "label": ..., "next_start": ...} with the next
     upcoming span, if any is known.
+
+    Pass pre-fetched `spans` (from fetch_spans()) to avoid a redundant
+    network round-trip when the caller already has one.
     """
     now = now or datetime.now().astimezone()
-    spans = fetch_spans(zip_code, havdalah_minutes)
+    spans = spans if spans is not None else fetch_spans(zip_code, havdalah_minutes)
     for span in spans:
         if span.start <= now < span.end:
             return {
