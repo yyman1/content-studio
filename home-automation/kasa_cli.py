@@ -17,6 +17,7 @@ Usage:
     python kasa_cli.py off <name-or-ip> [--child <alias-or-id>]
     python kasa_cli.py toggle <name-or-ip> [--child <alias-or-id>]
     python kasa_cli.py brightness <name-or-ip> <0-100> [--child <alias-or-id>]
+    python kasa_cli.py fade <name-or-ip> [--levels 75,50,25,10] [--duration 10] [--step-up-delay 0.3]
 
 Run `discover --save` once (with devices powered on and connected to your
 Wi-Fi) to build a name -> IP map in .secrets/kasa_devices.json, so later
@@ -36,7 +37,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from kasa import Device, Discover
+from kasa import Device, Discover, Module
 
 SECRETS_DIR = Path(__file__).parent / ".secrets"
 CREDENTIALS_PATH = SECRETS_DIR / "kasa_credentials.json"
@@ -265,6 +266,43 @@ def cmd_brightness(args: argparse.Namespace) -> None:
     print(f"Set {alias!r} brightness to {args.percent}%.")
 
 
+async def _fade(
+    host: str,
+    username,
+    password,
+    child_ref: Optional[str],
+    levels: list[int],
+    duration: float,
+    step_up_delay: float,
+) -> str:
+    dev = await _connect(host, username, password)
+    target = _target(dev, child_ref)
+    if Module.Light not in target.modules:
+        raise SystemExit(f"{target.alias!r} isn't dimmable (no Light module).")
+    light = target.modules[Module.Light]
+
+    step_delay = duration / len(levels)
+    for level in levels:
+        await light.set_brightness(level)
+        print(f"{target.alias!r} -> {level}%")
+        await asyncio.sleep(step_delay)
+
+    # Quick step back up through the same levels in reverse, then to full.
+    for level in [*reversed(levels[:-1]), 100]:
+        await light.set_brightness(level)
+        print(f"{target.alias!r} -> {level}% (step up)")
+        await asyncio.sleep(step_up_delay)
+
+    return target.alias
+
+
+def cmd_fade(args: argparse.Namespace) -> None:
+    username, password = _load_credentials()
+    host = _resolve_host(args.device)
+    levels = [int(x) for x in args.levels.split(",")]
+    asyncio.run(_fade(host, username, password, args.child, levels, args.duration, args.step_up_delay))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -294,6 +332,17 @@ def main() -> None:
     p_bright.add_argument("percent", type=int, help="Brightness percent, 0-100.")
     p_bright.add_argument("--child", help="Outlet alias or child_id, for a power strip.")
     p_bright.set_defaults(func=cmd_brightness)
+
+    p_fade = sub.add_parser("fade", help="Step a dimmable device down through brightness levels, then back up to 100%.")
+    p_fade.add_argument("device", help="Saved device name or IP address.")
+    p_fade.add_argument("--child", help="Outlet alias or child_id, for a power strip.")
+    p_fade.add_argument("--levels", default="75,50,25,10", help="Comma-separated brightness levels to step down through.")
+    p_fade.add_argument("--duration", type=float, default=10, help="Seconds to spend stepping down through --levels.")
+    p_fade.add_argument(
+        "--step-up-delay", type=float, default=0.3,
+        help="Seconds to hold at each level on the quick step back up through --levels (reversed) to 100%%.",
+    )
+    p_fade.set_defaults(func=cmd_fade)
 
     args = parser.parse_args()
     args.func(args)
