@@ -35,6 +35,11 @@ meant to drive a Shabbat/holiday lighting routine:
   below). **Live on cron as of 2026-09-18**, running every 5 minutes --
   see that section for what's still open (first real-device run hasn't
   been verified yet).
+- **`ecobee_yomtov.py`** — replicates each thermostat's own native
+  Saturday schedule onto Yom Tov days (see "Yom Tov thermostat
+  automation" section below), so nobody has to manually clear the
+  "away" block by hand every time a holiday falls on a weekday. **Live
+  on cron as of 2026-09-18**, running every 10 minutes.
 
 ## Credentials
 
@@ -157,6 +162,69 @@ Still to do:
    numbers -- compute fresh, rules can change), group by the comments
    in `DEVICE_RULES` (they mirror the PDF's categories), and send via
    the Gmail MCP tool.
+
+Two device-rule changes landed after the schedule email above went
+out, both in `DEVICE_RULES`: Master Bathroom got a `yomtov_on=08:00,
+yomtov_off=12:00` daytime window added on top of its existing evening/
+before-havdalah rules, and Dining Room Chandelier got a one-time
+`YOMTOV_ON_OVERRIDES[("Dining Room Chandelier", date(2026,9,19))] =
+10:30` exception (auto-expires once that date passes -- see the
+comment above that dict for the pattern if another one-off is needed).
+
+## Yom Tov thermostat automation — status
+
+The household asked to "replicate the Shabbat schedule on Yom Tov" so
+nobody has to manually intervene every time a holiday falls on a
+weekday: each Ecobee thermostat's own native weekly program already
+has a correct Saturday row (day index 5 -- no "away" block, later
+wake-up), it's just that a Tuesday-Rosh-Hashana or similar still runs
+its normal weekday "away" block during work hours since nobody's
+actually at work.
+
+`ecobee_yomtov.py` polls every 10 min (same self-healing,
+recompute-from-scratch-and-diff design as `shabbat_automation.py`,
+state in `.secrets/yomtov_thermostat_state.json`, log in
+`ecobee_yomtov.log`). Each run, per thermostat:
+- If `now` is a Saturday, or isn't inside an active
+  `jewish_calendar` span, or the active span's label is plain
+  "Shabbat" (no holiday overlapping it) -- leave it alone / resume the
+  native program. Plain weekly Shabbat is intentionally never touched,
+  since the native Friday+Saturday schedule already handles it; only
+  a span whose label is an actual holiday name triggers anything.
+  ("Shabbat" vs. a holiday name is exactly what
+  `jewish_calendar._label_for()` already encodes, no extra logic
+  needed.)
+- Otherwise, read that thermostat's own Saturday schedule row
+  (`program.schedule[5]`, 48 half-hour-slot climateRefs) for whatever
+  slot `now` falls in, and hold that climateRef via `setHold` with
+  `holdType=indefinite` (not `nextTransition` -- we want to keep
+  overriding it ourselves on every poll, not have ecobee's own
+  schedule engine silently reclaim it at its next transition).
+
+Verified with synthetic-clock simulation against real Hebcal + ecobee
+schedule data (Yom Kippur, a Sukkot chain that includes an actual
+Saturday mid-holiday, and this week's plain Shabbat -- see conversation
+history / commit message for the transition-by-transition results),
+then a real one-off `set_hold`/`resume_program` smoke test against the
+live Main Floor thermostat on 2026-09-18 before enabling cron.
+
+**Known caveat, confirmed live during that smoke test:** `resume_program`
+clears *all* holds on a thermostat, not just ones this script set. If a
+`touSetback` (utility demand-response) or any other unrelated hold is
+active when a Yom Tov ends, this script's havdalah-time resume will
+clear that too. Hasn't caused a real problem yet, just something to
+know if a thermostat's behavior looks off right after a holiday ends.
+
+Cron entry (live since 2026-09-18):
+```
+*/10 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 ecobee_yomtov.py --zip 07666 --havdalah-minutes 42 >> ecobee_yomtov_cron.log 2>&1
+```
+
+Not yet verified against a real Yom Tov transition end-to-end via cron
+(only the manual smoke test above) -- Yom Kippur (candle-lighting Sun
+2026-09-20 6:40pm) will be the first real one. Check
+`ecobee_yomtov.log` and `ecobee_yomtov_cron.log` (no tracebacks) after
+it's had a chance to run through that.
 
 ## Working conventions
 
