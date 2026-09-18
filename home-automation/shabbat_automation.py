@@ -123,7 +123,8 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     ),
     "Primary Lobby": DeviceRule(evening_start=True, relative_off_hours=2, relative_off_cap=_t("22:00")),
     "Master Bathroom": DeviceRule(
-        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2
+        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2,
+        yomtov_on=_t("08:00"), yomtov_off=_t("12:00"),
     ),
     # Overnight-only per household confirmation: no Yom Tov daytime behavior.
     "Master Bathroom Toilet": DeviceRule(
