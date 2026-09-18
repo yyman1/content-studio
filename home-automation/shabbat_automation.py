@@ -99,7 +99,9 @@ DEVICE_RULES: dict[str, DeviceRule] = {
         evening_start=True, relative_off_hours=4, relative_off_cap=_t("23:00"),
         yomtov_on=_t("12:00"), yomtov_off=_t("14:30"),
     ),
-    "Dining Room": DeviceRule(evening_start=True, nightly_cutoff=_t("23:30")),
+    "Dining Room": DeviceRule(
+        evening_start=True, nightly_cutoff=_t("23:30"), yomtov_on=_t("08:00"), yomtov_off=_t("23:30")
+    ),
     # "Dining Room Dummy": do nothing -- omitted.
     "Dining Room Chandelier": DeviceRule(
         evening_start=True, relative_off_hours=4, relative_off_cap=_t("23:00"),
