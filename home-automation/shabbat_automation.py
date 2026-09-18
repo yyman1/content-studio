@@ -53,10 +53,15 @@ LOG_PATH = HERE / "shabbat_automation.log"
 KASA_CLI = HERE / "kasa_cli.py"
 
 # How far back/forward to look for candle-lighting events relevant to
-# "right now" -- wide enough to comfortably cover an evening-start
-# window (up to ~28h for a 2-day Yom Tov's second lighting) without
-# fetching the whole year's events every run.
-LOOKBACK_HOURS = 30
+# "right now". A dimmable device with no yomtov_off/nightly_cutoff
+# falls back to re-checking its own dim_at every night of a Shabbat/
+# Yom Tov, anchored to its *original* candle-lighting -- even on a
+# plain one-candle weekly Shabbat's second night, which needs Friday's
+# candle still "in range" as late as Saturday ~11:30pm (worst case:
+# Friday's earliest possible candle-lighting, ~4:10pm at winter
+# solstice here, to Saturday's latest-used cutoff, 11:30pm -- about
+# 31h20m). 36h leaves comfortable margin without fetching the year.
+LOOKBACK_HOURS = 36
 LOOKFORWARD_HOURS = 3
 
 
@@ -214,12 +219,12 @@ def _yomtov_desired(rule: DeviceRule, now: datetime, spans: list[jc.Span]) -> Op
         return None
     if now < on_dt:
         return None
-    # If no explicit daytime off time was given, fall back to the same
-    # nightly cutoff the evening rule uses -- without this, a device
-    # like Living Room (yomtov_on 8:30am, no yomtov_off) would read as
-    # "on" for the rest of the calendar day with no upper bound at all,
-    # overriding its 11:30pm nightly cutoff instead of matching it.
-    off_time = rule.yomtov_off or rule.nightly_cutoff
+    # If no explicit daytime off time was given, fall back to whatever
+    # bound the evening rule uses -- a fixed nightly cutoff, or (for a
+    # dimmable device with neither) its dim time, so e.g. Bathroom
+    # Upstairs main goes back to its 10%-at-11pm dim that same night
+    # instead of staying at full brightness with no bound at all.
+    off_time = rule.yomtov_off or rule.nightly_cutoff or (rule.dim_at if rule.dimmable else None)
     if off_time is not None:
         off_dt = datetime.combine(now.date(), off_time, tzinfo=now.tzinfo)
         if now >= off_dt:
@@ -239,7 +244,14 @@ def desired_state(
         return result
 
     if rule.evening_start:
-        for candle in events.candles:
+        # Most-recent-first: with LOOKBACK_HOURS wide enough to span a
+        # full weekend, a multi-day chain's second candle-lighting and
+        # its first can both be "in range" for the same `now`. A stale
+        # first-night candle's indefinite dim-with-no-sunrise-cutoff
+        # would otherwise win over the second night's fresher
+        # "still lit, not yet its own dim time" window just because it
+        # happened to be checked first.
+        for candle in reversed(events.candles):
             if now - timedelta(hours=LOOKBACK_HOURS) <= candle <= now + timedelta(hours=LOOKFORWARD_HOURS):
                 result = _evening_desired(rule, now, candle, events.holidays)
                 if result is not None:
