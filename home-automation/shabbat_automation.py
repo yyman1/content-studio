@@ -76,6 +76,7 @@ class DeviceRule:
     off_at_sunrise: bool = False  # after dimming, fully off at the next sunrise
     yomtov_on: Optional[time] = None  # daytime on trigger (any Shabbat/Yom Tov day)
     yomtov_off: Optional[time] = None  # daytime off trigger (optional)
+    before_havdalah_hours: Optional[float] = None  # on N hours before havdalah, off at nightly_cutoff
     sukkot_only: bool = False  # evening/nightly rules only apply during Sukkot
     dimmable: bool = field(init=False, default=False)
 
@@ -122,7 +123,7 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     ),
     "Primary Lobby": DeviceRule(evening_start=True, relative_off_hours=2, relative_off_cap=_t("22:00")),
     "Master Bathroom": DeviceRule(
-        evening_start=True, nightly_cutoff=_t("23:00"), yomtov_on=_t("08:30"), yomtov_off=_t("12:00")
+        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2
     ),
     # Overnight-only per household confirmation: no Yom Tov daytime behavior.
     "Master Bathroom Toilet": DeviceRule(
@@ -135,7 +136,7 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     ),
     "Bathroom Mirror": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00")),
     # Basement
-    "Basement": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00")),
+    "Basement": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00"), yomtov_on=_t("10:00")),
     "Basement Playroom": DeviceRule(
         evening_start=True, nightly_cutoff=_t("23:00"), yomtov_on=_t("12:00"), yomtov_off=_t("18:00")
     ),
@@ -234,6 +235,27 @@ def _yomtov_desired(rule: DeviceRule, now: datetime, spans: list[jc.Span]) -> Op
     return "on"
 
 
+def _havdalah_desired(rule: DeviceRule, now: datetime, events: jc.Events) -> Optional[str]:
+    """Return "on" if `now` is inside a before-havdalah window (e.g.
+    "on 2h before havdalah, off at 11pm"), keyed off the actual
+    havdalah event rather than a fixed clock time so it tracks the
+    real end of Shabbat/Yom Tov week to week."""
+    if rule.before_havdalah_hours is None:
+        return None
+    for havdalah in reversed(events.havdalahs):
+        if not (now - timedelta(hours=LOOKBACK_HOURS) <= havdalah <= now + timedelta(hours=LOOKFORWARD_HOURS)):
+            continue
+        on_dt = havdalah - timedelta(hours=rule.before_havdalah_hours)
+        if now < on_dt:
+            continue
+        if rule.nightly_cutoff is not None:
+            cutoff_dt = datetime.combine(havdalah.date(), rule.nightly_cutoff, tzinfo=havdalah.tzinfo)
+            if now >= cutoff_dt:
+                continue
+        return "on"
+    return None
+
+
 def desired_state(
     name: str, rule: DeviceRule, now: datetime, events: jc.Events, spans: list[jc.Span]
 ) -> str:
@@ -242,6 +264,10 @@ def desired_state(
     # so it would otherwise keep "winning" straight through an explicit
     # daytime yomtov_on trigger the next morning and mask it entirely.
     result = _yomtov_desired(rule, now, spans)
+    if result is not None:
+        return result
+
+    result = _havdalah_desired(rule, now, events)
     if result is not None:
         return result
 
