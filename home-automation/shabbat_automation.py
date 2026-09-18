@@ -148,6 +148,14 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     # Named for a person: do nothing -- omitted.
 }
 
+# One-off exceptions to a device's normal yomtov_on time, for a single
+# date only -- doesn't touch DEVICE_RULES, so it stops applying on its
+# own once the date passes. Safe to delete stale entries when cleaning
+# up, but leaving them costs nothing since they just never match again.
+YOMTOV_ON_OVERRIDES: dict[tuple[str, date], time] = {
+    ("Dining Room Chandelier", date(2026, 9, 19)): _t("10:30"),
+}
+
 
 def _load_state() -> dict:
     if STATE_PATH.exists():
@@ -209,10 +217,11 @@ def _active_at(dt: datetime, spans: list[jc.Span]) -> bool:
     return any(s.start <= dt < s.end for s in spans)
 
 
-def _yomtov_desired(rule: DeviceRule, now: datetime, spans: list[jc.Span]) -> Optional[str]:
-    if rule.yomtov_on is None:
+def _yomtov_desired(name: str, rule: DeviceRule, now: datetime, spans: list[jc.Span]) -> Optional[str]:
+    yomtov_on = YOMTOV_ON_OVERRIDES.get((name, now.date()), rule.yomtov_on)
+    if yomtov_on is None:
         return None
-    on_dt = datetime.combine(now.date(), rule.yomtov_on, tzinfo=now.tzinfo)
+    on_dt = datetime.combine(now.date(), yomtov_on, tzinfo=now.tzinfo)
     # Check that on_dt itself falls inside a Shabbat/Yom Tov span -- not
     # just that "now" is active. On a plain Friday, "now" (evening) is
     # active once candles are lit, but that same Friday's *morning* was
@@ -264,7 +273,7 @@ def desired_state(
     # (e.g. Bathroom Upstairs main) has no natural expiration of its own,
     # so it would otherwise keep "winning" straight through an explicit
     # daytime yomtov_on trigger the next morning and mask it entirely.
-    result = _yomtov_desired(rule, now, spans)
+    result = _yomtov_desired(name, rule, now, spans)
     if result is not None:
         return result
 
