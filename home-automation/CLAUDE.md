@@ -207,7 +207,8 @@ comment above that dict for the pattern if another one-off is needed).
 Added 2026-09-20 from the household's written weekday spec
 (`WEEKDAY_RULES`). Cron every 5 min (`weekday_cron.log`, `weekday_automation.log`).
 **Goes live at Yom Kippur's havdalah, Mon 2026-09-21 ~7:37pm**
-(`GO_LIVE_HAVDALAH_DATE`); silent no-op before that.
+(`GO_LIVE_HAVDALAH_DATE`); before that only the two `always` lights
+(Front Door, Mudroom Porch) act, everything else is a silent no-op.
 
 - **Events, not states.** The spec is "off at 10pm" / "on at 6:30am", so each run
   fires a device's most recent applicable event once (token = date+time+action in
@@ -216,8 +217,10 @@ Added 2026-09-20 from the household's written weekday spec
   7:45-9:45) re-issues off every run in its window instead.
 - **Skipped during Shabbat/Yom Tov.** Events falling inside a Shabbat regime
   (candle-lighting minus 1h through havdalah) never fire. `always=True` events
-  (Front Door, Mudroom Porch: on at sunset / off at sunrise or 11:30pm,
-  "even on Shabbat and Yom Tov") ignore that. Sunset/sunrise come from Hebcal
+  (Front Door, Mudroom Porch: on 30 min before sunset / off at sunrise or
+  11:30pm, "even on Shabbat and Yom Tov") ignore that, and are also live
+  immediately rather than waiting for go-live (their app schedules were
+  disabled, so they'd otherwise be dark until Mon 9/21 havdalah). Sunset/sunrise come from Hebcal
   zmanim, cached in `.secrets/zmanim_cache.json`; the calendar is cached 6h in
   `.secrets/events_cache.json` (falls back to stale if Hebcal is down).
 - **Hand-off from `shabbat_automation.py`.** After havdalah, devices that have a

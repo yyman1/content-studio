@@ -20,7 +20,8 @@ havdalah), so Friday's 10pm "off" or Saturday's 8:45am "off" never fire.
 Rules marked always=True (Front Door, Mudroom Porch -- "even on Shabbat
 and Yom Tov") ignore that gate.
 
-Go-live: nothing runs until the havdalah on GO_LIVE_HAVDALAH_DATE. From
+Go-live: nothing regime-gated runs until the havdalah on GO_LIVE_HAVDALAH_DATE
+(the always=True sunset/sunrise rules are live immediately). From
 then on, devices with a weekday rule are also handed over by
 shabbat_automation.py once Shabbat ends (see yields_to_weekday()) so its
 post-havdalah cutoffs don't fight these times.
@@ -83,7 +84,8 @@ class Event:
     when: Union[time, str]  # a clock time, or SUNRISE / SUNSET
     action: str  # "on" | "off"
     days: Optional[frozenset] = None  # weekday() values it applies to; None = every day
-    always: bool = False  # also runs during Shabbat / Yom Tov
+    always: bool = False  # also runs during Shabbat / Yom Tov, and doesn't wait for go-live
+    offset: timedelta = timedelta(0)  # shifts a SUNRISE/SUNSET event, e.g. -30 min before sunset
 
 
 @dataclass
@@ -129,9 +131,12 @@ WEEKDAY_RULES: dict[str, WeekdayRule] = {
     "Basement Playroom": WeekdayRule([off("23:00")]),
     "Basement Hallway": WeekdayRule([off("22:00")]),
     "Basement Steps": WeekdayRule([off("07:45"), off("22:00")], enforce_off=[(_t("07:45"), _t("09:45"))]),
-    # Entryways / outdoor. Front Door and Mudroom Porch run "even on Shabbat and Yom Tov".
-    "Front Door": WeekdayRule([on(SUNSET, always=True), off(SUNRISE, always=True)]),
-    "Mudroom Porch": WeekdayRule([on(SUNSET, always=True), off("23:30", always=True)]),
+    # Entryways / outdoor. Front Door and Mudroom Porch run "even on Shabbat and Yom Tov":
+    # on 30 minutes before sunset, from now (not from the go-live havdalah).
+    "Front Door": WeekdayRule([on(SUNSET, always=True, offset=-timedelta(minutes=30)), off(SUNRISE, always=True)]),
+    "Mudroom Porch": WeekdayRule(
+        [on(SUNSET, always=True, offset=-timedelta(minutes=30)), off("23:30", always=True)]
+    ),
     "Backyard overhead light": WeekdayRule([off("23:00")]),
     "Back Porch Side Light": WeekdayRule([off("23:00")]),
     "Driveway front": WeekdayRule([off("23:30")]),
@@ -246,7 +251,7 @@ def zmanim(zip_code: str, day: date) -> dict[str, datetime]:
 def _event_dt(ev: Event, day: date, zip_code: str, tz) -> datetime:
     if isinstance(ev.when, time):
         return datetime.combine(day, ev.when, tzinfo=tz)
-    return zmanim(zip_code, day)[ev.when]
+    return zmanim(zip_code, day)[ev.when] + ev.offset
 
 
 def desired_event(
@@ -298,9 +303,11 @@ def run_once(
     zip_code: str, now: datetime, events: jc.Events, spans: list[jc.Span], dry_run: bool, state: dict
 ) -> bool:
     """One polling pass. Mutates `state`; returns True if it changed."""
-    live = live_datetime(events)
-    if live is None or now < live:
-        return False  # not live yet -- the go-live date's havdalah hasn't happened
+    go_live = live_datetime(events)
+    is_live = go_live is not None and now >= go_live
+    # Before go-live nothing regime-gated may fire: an event is only eligible at or after
+    # `live`, so give it a moment in the future. "always" events ignore this entirely.
+    live = go_live if is_live else now + timedelta(days=3650)
     dirty = False
     in_regime = in_shabbat_regime(now, spans)
     for name, rule in WEEKDAY_RULES.items():
@@ -323,7 +330,7 @@ def run_once(
                     state[name] = token
                     dirty = True
                     fired = True
-        if not fired and not in_regime:
+        if is_live and not fired and not in_regime:
             t = now.time()
             if any(start <= t < end for start, end in rule.enforce_off):
                 if dry_run:
