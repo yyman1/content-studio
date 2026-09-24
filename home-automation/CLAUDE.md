@@ -158,6 +158,63 @@ Still to do:
    in `DEVICE_RULES` (they mirror the PDF's categories), and send via
    the Gmail MCP tool.
 
+## Door sensor project — in progress, not built yet
+
+Household wants a door-open -> light-on trigger. Decided against Tapo's
+own T110/H100 (proprietary hub, would be a second closed ecosystem) and
+against routing through Alexa (extra cloud hop, household finds Alexa
+routines annoying to manage). Landed on: **Zigbee2MQTT + Mosquitto on
+this Pi**, feeding a small Python listener that calls `kasa_cli.py`
+directly -- same local-only philosophy as the rest of this project, no
+new cloud dependency.
+
+Hardware status as of 2026-09-24: **SONOFF Zigbee 3.0 USB Dongle
+Plus-E is plugged into the Pi.** Household also has an **Aqara
+door/window sensor** (MCCGQ11LM or MCCGQ14LM -- check which; both work
+with Zigbee2MQTT despite the box saying "Requires Aqara Hub", which is
+just aimed at the average Aqara-app buyer, not us). Neither Mosquitto
+nor Zigbee2MQTT is installed yet -- this is next.
+
+Setup plan (not yet executed -- if you're picking this up, verify each
+step actually happened rather than assuming it did just because it's
+written here):
+
+1. Find the dongle's persistent serial path: `ls -l
+   /dev/serial/by-id/`. Use this path, not `/dev/ttyUSB0`, which can
+   shift if another USB serial device is ever added.
+2. `sudo apt install -y mosquitto mosquitto-clients && sudo systemctl
+   enable --now mosquitto` -- local MQTT broker, default port 1883.
+3. Node.js 20.x via nodesource, then clone Zigbee2MQTT into
+   `/opt/zigbee2mqtt` and `npm ci` there.
+4. Configure `/opt/zigbee2mqtt/data/configuration.yaml`: `mqtt.server:
+   mqtt://localhost:1883`, `serial.port` set to the by-id path from
+   step 1, `permit_join: true` while pairing (turn off once devices are
+   paired, security -- don't leave it on indefinitely), `frontend.port:
+   8080`.
+5. Run once via `npm start` interactively to confirm the network comes
+   up and the Aqara sensor joins (hold its reset button ~5s while
+   permit_join is true) before wiring it into systemd as a persistent
+   service.
+6. Once the sensor is joined and publishing to
+   `zigbee2mqtt/<friendly_name>` over MQTT, write a small Python
+   listener (paho-mqtt, add to requirements.txt) that subscribes to
+   that topic and calls `kasa_cli.py on <device>` via subprocess on the
+   open/close event -- mirrors how `shabbat_automation.py` already
+   shells out to `kasa_cli.py`, just event-triggered instead of polled.
+7. If interference/flaky readings show up (Pi 5's USB 3.0 ports share
+   the 2.4GHz band with Zigbee), move the dongle onto a cheap USB
+   extension cable a few inches from the board -- known fix, don't
+   need to re-diagnose from scratch.
+
+**Open question, not yet answered -- do not assume an answer, ask the
+household:** should the door-triggered light be suppressed entirely
+during Shabbat/Yom Tov (checking `jewish_calendar.current_status()`
+before acting, same function `shabbat_automation.py` already uses), or
+does their halachic guidance distinguish this from other cases? This
+is a household/rabbinic decision, not a technical one -- the code
+supports either "fully suppressed" or something more granular equally
+easily once the household says which they want.
+
 ## Working conventions
 
 - Everything lives in `~/content-studio/home-automation` on this Pi,
