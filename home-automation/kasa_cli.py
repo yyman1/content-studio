@@ -73,6 +73,10 @@ def _resolve_host(name_or_host: str) -> str:
     devices = _load_devices()
     if name_or_host in devices:
         return devices[name_or_host]["host"]
+    stripped = name_or_host.strip()
+    for name, info in devices.items():
+        if name.strip() == stripped:
+            return info["host"]
     return name_or_host
 
 
@@ -214,6 +218,11 @@ async def _set_power(host: str, username, password, child_ref: Optional[str], on
     else:
         await target.turn_off()
     await dev.update()
+    if target.is_on != on:
+        raise SystemExit(
+            f"{target.alias!r} did not confirm the requested power state "
+            f"(asked on={on}, still reports on={target.is_on})."
+        )
     return target.alias
 
 

@@ -43,9 +43,11 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import sleep as _sleep  # `time` above is datetime.time, not the module
 from typing import Optional
 
 import jewish_calendar as jc
+import weekday_automation as wd
 
 HERE = Path(__file__).parent
 STATE_PATH = HERE / ".secrets" / "shabbat_state.json"
@@ -78,6 +80,7 @@ class DeviceRule:
     yomtov_off: Optional[time] = None  # daytime off trigger (optional)
     before_havdalah_hours: Optional[float] = None  # on N hours before havdalah, off at nightly_cutoff
     sukkot_only: bool = False  # evening/nightly rules only apply during Sukkot
+    on_brightness: Optional[int] = None  # every "on" is at this brightness % instead of full/last-used
     dimmable: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
@@ -106,7 +109,7 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     # "Dining Room Dummy": do nothing -- omitted.
     "Dining Room Chandelier": DeviceRule(
         evening_start=True, relative_off_hours=4, relative_off_cap=_t("23:00"),
-        yomtov_on=_t("12:00"), yomtov_off=_t("15:00"),
+        yomtov_on=_t("12:00"), yomtov_off=_t("15:00"), on_brightness=15,
     ),
     "Kitchen": DeviceRule(evening_start=True, nightly_cutoff=_t("23:30"), yomtov_on=_t("08:00"), yomtov_off=_t("23:30")),
     "Table": DeviceRule(evening_start=True, nightly_cutoff=_t("23:30"), yomtov_on=_t("08:00"), yomtov_off=_t("22:00")),
@@ -123,7 +126,8 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     ),
     "Primary Lobby": DeviceRule(evening_start=True, relative_off_hours=2, relative_off_cap=_t("22:00")),
     "Master Bathroom": DeviceRule(
-        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2
+        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2,
+        yomtov_on=_t("08:00"), yomtov_off=_t("12:00"),
     ),
     # Overnight-only per household confirmation: no Yom Tov daytime behavior.
     "Master Bathroom Toilet": DeviceRule(
@@ -145,6 +149,27 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     "Back Porch Side Light": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00"), sukkot_only=True),
     "Driveway Backyard / Side": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00"), sukkot_only=True),
     # Named for a person: do nothing -- omitted.
+}
+
+# One-off exceptions to a device's normal yomtov_on time, for a single
+# date only -- doesn't touch DEVICE_RULES, so it stops applying on its
+# own once the date passes. Safe to delete stale entries when cleaning
+# up, but leaving them costs nothing since they just never match again.
+YOMTOV_ON_OVERRIDES: dict[tuple[str, date], time] = {
+    ("Dining Room Chandelier", date(2026, 9, 19)): _t("10:30"),
+}
+
+
+# One-off "stay off all day" exceptions: a device listed for a date is
+# forced off for that whole calendar date -- both the evening and the
+# daytime rules -- without touching DEVICE_RULES. Like YOMTOV_ON_OVERRIDES
+# it stops applying on its own once the dates pass.
+_YOM_KIPPUR_2026 = {date(2026, 9, 20), date(2026, 9, 21)}  # candle-lighting evening + Yom Kippur day
+SKIP_ON_DATES: dict[str, set[date]] = {
+    "Bar": _YOM_KIPPUR_2026,
+    "Dining Room Chandelier": _YOM_KIPPUR_2026,
+    "Table": _YOM_KIPPUR_2026,
+    "Basement Playroom": _YOM_KIPPUR_2026,
 }
 
 
@@ -208,10 +233,11 @@ def _active_at(dt: datetime, spans: list[jc.Span]) -> bool:
     return any(s.start <= dt < s.end for s in spans)
 
 
-def _yomtov_desired(rule: DeviceRule, now: datetime, spans: list[jc.Span]) -> Optional[str]:
-    if rule.yomtov_on is None:
+def _yomtov_desired(name: str, rule: DeviceRule, now: datetime, spans: list[jc.Span]) -> Optional[str]:
+    yomtov_on = YOMTOV_ON_OVERRIDES.get((name, now.date()), rule.yomtov_on)
+    if yomtov_on is None:
         return None
-    on_dt = datetime.combine(now.date(), rule.yomtov_on, tzinfo=now.tzinfo)
+    on_dt = datetime.combine(now.date(), yomtov_on, tzinfo=now.tzinfo)
     # Check that on_dt itself falls inside a Shabbat/Yom Tov span -- not
     # just that "now" is active. On a plain Friday, "now" (evening) is
     # active once candles are lit, but that same Friday's *morning* was
@@ -259,11 +285,14 @@ def _havdalah_desired(rule: DeviceRule, now: datetime, events: jc.Events) -> Opt
 def desired_state(
     name: str, rule: DeviceRule, now: datetime, events: jc.Events, spans: list[jc.Span]
 ) -> str:
+    if now.date() in SKIP_ON_DATES.get(name, ()):
+        return "off"
+
     # Yom Tov daytime is checked first: a dim-without-off_at_sunrise rule
     # (e.g. Bathroom Upstairs main) has no natural expiration of its own,
     # so it would otherwise keep "winning" straight through an explicit
     # daytime yomtov_on trigger the next morning and mask it entirely.
-    result = _yomtov_desired(rule, now, spans)
+    result = _yomtov_desired(name, rule, now, spans)
     if result is not None:
         return result
 
@@ -288,21 +317,54 @@ def desired_state(
     return "off"
 
 
-def apply_state(name: str, state: str) -> None:
+RETRY_INTERVAL_SECONDS = 60
+MAX_RETRIES = 3  # + the initial attempt = up to 3 extra minutes, kept under the 5-min cron interval
+
+
+def apply_state(name: str, state: str) -> bool:
+    """Issue the kasa_cli.py command for this device, retrying a minute apart
+    (Kasa/Tapo devices intermittently drop off wifi and often recover within
+    a couple of minutes) up to MAX_RETRIES times. kasa_cli.py's on/off now
+    confirms the device actually reports the requested power state, not just
+    that the call didn't raise, so a non-zero exit here means genuinely not
+    confirmed. Report whether it succeeded, so a failed command isn't
+    recorded as a completed transition (see main()) -- if it's still down
+    after MAX_RETRIES, the next 5-minute cron cycle keeps retrying it."""
+    # `cmds` run in order; all must succeed for the attempt to count.
+    rule = DEVICE_RULES.get(name)
     if state.startswith("dim:"):
         pct = state.split(":", 1)[1]
-        subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, pct], check=False)
+        cmds = [[sys.executable, str(KASA_CLI), "brightness", name, pct]]
+    elif state == "on" and rule and rule.on_brightness is not None:
+        # Fixed "on" brightness (e.g. Dining Room Chandelier at 15%). Set
+        # the level first so it never flashes at whatever it was last
+        # left at, then a confirmed turn-on -- `brightness` alone doesn't
+        # verify the device actually reports being on.
+        cmds = [
+            [sys.executable, str(KASA_CLI), "brightness", name, str(rule.on_brightness)],
+            [sys.executable, str(KASA_CLI), "on", name],
+        ]
     elif state == "on":
         # Devices with a dim rule must be explicitly set to full brightness
         # for "on" -- a plain turn_on() would resume at whatever brightness
         # was last set (e.g. still 15% from last night's dim), not full.
-        rule = DEVICE_RULES.get(name)
         if rule and rule.dimmable:
-            subprocess.run([sys.executable, str(KASA_CLI), "brightness", name, "100"], check=False)
+            cmds = [[sys.executable, str(KASA_CLI), "brightness", name, "100"]]
         else:
-            subprocess.run([sys.executable, str(KASA_CLI), "on", name], check=False)
+            cmds = [[sys.executable, str(KASA_CLI), "on", name]]
     else:
-        subprocess.run([sys.executable, str(KASA_CLI), "off", name], check=False)
+        cmds = [[sys.executable, str(KASA_CLI), "off", name]]
+
+    for attempt in range(MAX_RETRIES + 1):
+        if all(subprocess.run(c, check=False).returncode == 0 for c in cmds):
+            return True
+        if attempt < MAX_RETRIES:
+            _log(
+                f"{name}: didn't confirm {state!r} (attempt {attempt + 1}/{MAX_RETRIES + 1}), "
+                f"retrying in {RETRY_INTERVAL_SECONDS}s"
+            )
+            _sleep(RETRY_INTERVAL_SECONDS)
+    return False
 
 
 _ZIP = "07666"  # set from --zip in main(); module-level for _evening_desired's sunrise lookup
@@ -314,31 +376,50 @@ def main() -> None:
     parser.add_argument("--zip", required=True, help="US zip code for candle-lighting/havdalah/sunrise times.")
     parser.add_argument("--havdalah-minutes", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true", help="Log what would change, but don't actually act.")
+    parser.add_argument("--now", help="ISO datetime to pretend it is (testing; combine with --dry-run).")
     args = parser.parse_args()
     _ZIP = args.zip
 
-    now = datetime.now().astimezone()
+    now = datetime.fromisoformat(args.now).astimezone() if args.now else datetime.now().astimezone()
     events = jc.fetch_events(args.zip, args.havdalah_minutes)
     spans = jc.fetch_spans(args.zip, args.havdalah_minutes, events=events)
-    status = jc.current_status(args.zip, args.havdalah_minutes, now, spans=spans)
+    run_once(args.zip, args.havdalah_minutes, now, events, spans, args.dry_run, _load_state())
 
-    state = _load_state()
+
+def run_once(
+    zip_code: str, havdalah_minutes: int, now: datetime, events: jc.Events, spans: list[jc.Span],
+    dry_run: bool, state: dict,
+) -> None:
+    status = jc.current_status(zip_code, havdalah_minutes, now, spans=spans)
+
     changed = 0
+    handed_over = False
     for name, rule in DEVICE_RULES.items():
+        # Once Shabbat/Yom Tov is over, devices that have a weekday rule belong
+        # to weekday_automation.py. Record that (no command) so that the next
+        # Shabbat's first "on" isn't mistaken for "already on".
+        if wd.yields_to_weekday(name, now, events, spans):
+            if state.get(name) != wd.YIELD_STATE:
+                state[name] = wd.YIELD_STATE
+                handed_over = True
+            continue
         desired = desired_state(name, rule, now, events, spans)
         previous = state.get(name)
         if desired != previous:
-            changed += 1
-            if args.dry_run:
+            if dry_run:
+                changed += 1
                 _log(f"[dry-run] {name}: {previous!r} -> {desired!r}")
-            else:
+                state[name] = desired
+            elif apply_state(name, desired):
+                changed += 1
                 _log(f"{name}: {previous!r} -> {desired!r}")
-                apply_state(name, desired)
-            state[name] = desired
+                state[name] = desired
+            else:
+                _log(f"{name}: {previous!r} -> {desired!r} FAILED, will retry next run")
 
+    if (changed or handed_over) and not dry_run:
+        _save_state(state)
     if changed:
-        if not args.dry_run:
-            _save_state(state)
         _log(f"Done: {changed} device(s) changed (active={status['active']}, label={status.get('label')}).")
     # No log line at all when nothing changed -- keeps the log readable
     # across weeks of 5-minute polling instead of a no-op line every run.

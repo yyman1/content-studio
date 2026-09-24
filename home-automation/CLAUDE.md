@@ -35,6 +35,11 @@ meant to drive a Shabbat/holiday lighting routine:
   below). **Live on cron as of 2026-09-18**, running every 5 minutes --
   see that section for what's still open (first real-device run hasn't
   been verified yet).
+- **`ecobee_yomtov.py`** — replicates each thermostat's own native
+  Saturday schedule onto Yom Tov days (see "Yom Tov thermostat
+  automation" section below), so nobody has to manually clear the
+  "away" block by hand every time a holiday falls on a weekday. **Live
+  on cron as of 2026-09-18**, running every 10 minutes.
 
 ## Credentials
 
@@ -157,6 +162,143 @@ Still to do:
    numbers -- compute fresh, rules can change), group by the comments
    in `DEVICE_RULES` (they mirror the PDF's categories), and send via
    the Gmail MCP tool.
+
+**Update 2026-09-20: this email is now automated.** `schedule_email.py`
+replays `shabbat_automation.desired_state()` over the whole
+candle-lighting -> havdalah span in 5-minute steps (the cron cadence) and
+turns the transitions into the email, so it always reflects the current
+`DEVICE_RULES` and one-off overrides -- nothing to hand-edit. Cron runs it
+at 12:00 daily (plus a 12:20 retry, since Hebcal/network blips are real --
+see cron.log); it's a silent no-op unless a span *starts* that day, so one
+email goes out at noon on the day of candle-lighting for every Shabbat and
+Yom Tov (a multi-day chain gets a single email). Delivery is via
+`claude -p` with only `mcp__claude_ai_Gmail__send_message` allowed
+(the Pi has no SMTP creds); sent spans are recorded in
+`.secrets/schedule_email_sent.json` so the retry can't duplicate. Sends to
+yerlichman@gmail.com only, matching the 9/18 email. Preview any date with
+`venv/bin/python3 schedule_email.py --zip 07666 --date YYYY-MM-DD --print`.
+A new device in `DEVICE_RULES` should also be added to `GROUPS` in that file
+(otherwise it lands under an "OTHER" heading rather than being dropped).
+Log: `schedule_email.log` / `schedule_email_cron.log`.
+
+```
+0 12 * * *  cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 schedule_email.py --zip 07666 --havdalah-minutes 42 --send >> schedule_email_cron.log 2>&1
+20 12 * * * (same command -- retry, guarded by the sent marker)
+```
+
+**Update 2026-09-20:** `DeviceRule.on_brightness` (new) makes every "on"
+for that device land at a fixed brightness instead of full/last-used.
+Dining Room Chandelier is set to 15% (`on_brightness=15`). `apply_state`
+runs `brightness <pct>` first (so it never flashes at the old level), then
+a confirmed `on`. Desired state is still just "on"/"off" in the state file
+-- only the command sequence and the schedule email ("on at 15%") differ.
+First real run: Sun 2026-09-20 ~5:40pm; check `shabbat_automation.log`.
+
+Two device-rule changes landed after the schedule email above went
+out, both in `DEVICE_RULES`: Master Bathroom got a `yomtov_on=08:00,
+yomtov_off=12:00` daytime window added on top of its existing evening/
+before-havdalah rules, and Dining Room Chandelier got a one-time
+`YOMTOV_ON_OVERRIDES[("Dining Room Chandelier", date(2026,9,19))] =
+10:30` exception (auto-expires once that date passes -- see the
+comment above that dict for the pattern if another one-off is needed).
+
+## Weekday (non-Shabbat/Yom Tov) lighting — `weekday_automation.py`
+
+Added 2026-09-20 from the household's written weekday spec
+(`WEEKDAY_RULES`). Cron every 5 min (`weekday_cron.log`, `weekday_automation.log`).
+**Goes live at Yom Kippur's havdalah, Mon 2026-09-21 ~7:37pm**
+(`GO_LIVE_HAVDALAH_DATE`); before that only the two `always` lights
+(Front Door, Mudroom Porch) act, everything else is a silent no-op.
+
+- **Events, not states.** The spec is "off at 10pm" / "on at 6:30am", so each run
+  fires a device's most recent applicable event once (token = date+time+action in
+  `.secrets/weekday_state.json`). A light someone turns back on after its "off"
+  stays on; the next event still fires. `enforce_off` (Basement Steps
+  7:45-9:45) re-issues off every run in its window instead.
+- **Skipped during Shabbat/Yom Tov.** Events falling inside a Shabbat regime
+  (candle-lighting minus 1h through havdalah) never fire. `always=True` events
+  (Front Door, Mudroom Porch: on 30 min before sunset / off at sunrise or
+  11:30pm, "even on Shabbat and Yom Tov") ignore that, and are also live
+  immediately rather than waiting for go-live (their app schedules were
+  disabled, so they'd otherwise be dark until Mon 9/21 havdalah). Sunset/sunrise come from Hebcal
+  zmanim, cached in `.secrets/zmanim_cache.json`; the calendar is cached 6h in
+  `.secrets/events_cache.json` (falls back to stale if Hebcal is down).
+- **Hand-off from `shabbat_automation.py`.** After havdalah, devices that have a
+  weekday rule are skipped by the Shabbat script (`wd.yields_to_weekday`; it
+  records state `"weekday"` so the next Shabbat's first "on" still fires).
+  Without this, Shabbat's post-havdalah cutoffs (Living Room 11:30pm, Upstairs
+  main dim-to-10% at 11pm, ...) would fight the weekday times. Devices the spec
+  says "do nothing" for (Master Bathroom, Toilet, Main Bedroom, Primary Lobby)
+  keep their Shabbat post-havdalah behavior.
+- Test with a fake clock: `--now 2026-09-21T22:00:00-04:00 --dry-run` on either script.
+
+Kasa-app (on-device) schedules that are still ENABLED and coexist with this
+(re-read 2026-09-20 after the household disabled/removed the overlapping
+ones; disabled rules are ignored): Mudroom Porch and Driveway front each on
+5:30am / off 6:30am Tue+Fri (deliberately kept by the household -- the Pi
+never issues anything in that window); Backyard overhead off 23:00 daily
+(same time as the Pi rule); Driveway Backyard/Side off 23:59 daily. Front Door
+and Back Porch Side Light have no enabled app rules (Pi is the only
+controller). Household decisions: Table's 7am on / 8am off are Mon-Fri only;
+Back Porch Side Light weekday off is 11pm. Mudroom Hallway failed auth once
+during a scan on 2026-09-20 but was fine one-at-a-time -- that was parallel
+connections colliding with cron, not the stale-credential gotcha; don't scan
+devices in parallel while cron is running.
+
+## Yom Tov thermostat automation — status
+
+The household asked to "replicate the Shabbat schedule on Yom Tov" so
+nobody has to manually intervene every time a holiday falls on a
+weekday: each Ecobee thermostat's own native weekly program already
+has a correct Saturday row (day index 5 -- no "away" block, later
+wake-up), it's just that a Tuesday-Rosh-Hashana or similar still runs
+its normal weekday "away" block during work hours since nobody's
+actually at work.
+
+`ecobee_yomtov.py` polls every 10 min (same self-healing,
+recompute-from-scratch-and-diff design as `shabbat_automation.py`,
+state in `.secrets/yomtov_thermostat_state.json`, log in
+`ecobee_yomtov.log`). Each run, per thermostat:
+- If `now` is a Saturday, or isn't inside an active
+  `jewish_calendar` span, or the active span's label is plain
+  "Shabbat" (no holiday overlapping it) -- leave it alone / resume the
+  native program. Plain weekly Shabbat is intentionally never touched,
+  since the native Friday+Saturday schedule already handles it; only
+  a span whose label is an actual holiday name triggers anything.
+  ("Shabbat" vs. a holiday name is exactly what
+  `jewish_calendar._label_for()` already encodes, no extra logic
+  needed.)
+- Otherwise, read that thermostat's own Saturday schedule row
+  (`program.schedule[5]`, 48 half-hour-slot climateRefs) for whatever
+  slot `now` falls in, and hold that climateRef via `setHold` with
+  `holdType=indefinite` (not `nextTransition` -- we want to keep
+  overriding it ourselves on every poll, not have ecobee's own
+  schedule engine silently reclaim it at its next transition).
+
+Verified with synthetic-clock simulation against real Hebcal + ecobee
+schedule data (Yom Kippur, a Sukkot chain that includes an actual
+Saturday mid-holiday, and this week's plain Shabbat -- see conversation
+history / commit message for the transition-by-transition results),
+then a real one-off `set_hold`/`resume_program` smoke test against the
+live Main Floor thermostat on 2026-09-18 before enabling cron.
+
+**Known caveat, confirmed live during that smoke test:** `resume_program`
+clears *all* holds on a thermostat, not just ones this script set. If a
+`touSetback` (utility demand-response) or any other unrelated hold is
+active when a Yom Tov ends, this script's havdalah-time resume will
+clear that too. Hasn't caused a real problem yet, just something to
+know if a thermostat's behavior looks off right after a holiday ends.
+
+Cron entry (live since 2026-09-18):
+```
+*/10 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 ecobee_yomtov.py --zip 07666 --havdalah-minutes 42 >> ecobee_yomtov_cron.log 2>&1
+```
+
+Not yet verified against a real Yom Tov transition end-to-end via cron
+(only the manual smoke test above) -- Yom Kippur (candle-lighting Sun
+2026-09-20 6:40pm) will be the first real one. Check
+`ecobee_yomtov.log` and `ecobee_yomtov_cron.log` (no tracebacks) after
+it's had a chance to run through that.
 
 ## Door sensor project — in progress, not built yet
 
