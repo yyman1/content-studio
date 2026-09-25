@@ -275,7 +275,11 @@ every 5 min and a lock in `.secrets/` makes the extras exit, so it
 recovers from crashes and reboots within 5 minutes (no sudo on this Pi for
 a system service, and no linger for a user one). The baseline door state
 comes from `~/zigbee/z2m-data/state.json`, so a restart neither flips the
-light nor swallows the next event. Log: `closet_door_light.log`.
+light nor swallows the next event. It holds a python-kasa connection to
+the switch open between events, so door to light takes about 0.12s,
+compared with about 1-1.5s when it spawned `kasa_cli.py` per event. On
+failure it reconnects once and then falls back to `kasa_cli.py`. Each log
+line records the latency. Log: `closet_door_light.log`.
 `door_sensor_test.py` is the earlier test harness it grew from.
 
 ```

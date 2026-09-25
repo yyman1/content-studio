@@ -12,6 +12,11 @@ repeat the same value. The starting state comes from Zigbee2MQTT's saved
 state.json, so a restart neither flips the light nor misses the next
 open/close.
 
+Commands go straight to the switch over a connection kept open between
+events (~0.1s from door to light), falling back to a fresh connection and
+then to kasa_cli.py if that fails. Each change is confirmed afterwards,
+once the light has already switched.
+
 Long-running; cron starts it every 5 minutes and the lock makes extra
 copies exit at once, so it comes back within 5 minutes of a crash or
 reboot.
@@ -23,15 +28,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import fcntl
 import json
-import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 import jewish_calendar as jc
+import kasa_cli as kc
 import weekday_automation as wa
 
 HERE = Path(__file__).parent
@@ -70,15 +76,52 @@ def saved_contact():
         return None
 
 
-def listen(zip_code: str, havdalah_minutes: int) -> None:
-    sub = subprocess.Popen(
-        ["docker", "exec", "mosquitto", "mosquitto_sub", "-t", f"zigbee2mqtt/{SENSOR}"],
-        stdout=subprocess.PIPE,
-        text=True,
+class Light:
+    """A connection to DEVICE kept open between door events."""
+
+    def __init__(self) -> None:
+        self.username, self.password = kc._load_credentials()
+        self.dev = None
+
+    async def _connect(self):
+        try:
+            self.dev = await kc._connect(kc._resolve_host(DEVICE), self.username, self.password)
+        except SystemExit as ex:  # kc._connect reports failures this way
+            self.dev = None
+            raise ConnectionError(str(ex)) from None
+
+    async def set(self, on: bool) -> str:
+        """Switch the light; return a short note for the log."""
+        start = time.monotonic()
+        for attempt in (1, 2):  # second try on a fresh connection
+            try:
+                if self.dev is None:
+                    await self._connect()
+                await (self.dev.turn_on() if on else self.dev.turn_off())
+                ms = (time.monotonic() - start) * 1000
+                await self.dev.update()
+                if self.dev.is_on != on:
+                    return f"sent in {ms:.0f}ms but switch still reports on={self.dev.is_on}"
+                return f"{ms:.0f}ms"
+            except Exception as ex:  # noqa: BLE001
+                self.dev = None
+                err = f"{type(ex).__name__}: {ex}"
+        r = await asyncio.create_subprocess_exec(
+            sys.executable, str(KASA_CLI), "on" if on else "off", DEVICE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        out = (await r.communicate())[0].decode().strip().splitlines()
+        return f"direct failed ({err}); kasa_cli: {out[0] if out else r.returncode}"
+
+
+async def listen(zip_code: str, havdalah_minutes: int, light: Light) -> None:
+    sub = await asyncio.create_subprocess_exec(
+        "docker", "exec", "mosquitto", "mosquitto_sub", "-t", f"zigbee2mqtt/{SENSOR}",
+        stdout=asyncio.subprocess.PIPE,
     )
     last_contact = saved_contact()
     try:
-        for line in sub.stdout:
+        async for line in sub.stdout:
             try:
                 contact = json.loads(line).get("contact")
             except (json.JSONDecodeError, AttributeError):
@@ -88,17 +131,27 @@ def listen(zip_code: str, havdalah_minutes: int) -> None:
             first, last_contact = last_contact is None, contact
             if first:  # no saved state to compare against; just record it
                 continue
-            state = "off" if contact else "on"
+            door = "closed" if contact else "opened"
             if in_shabbat(zip_code, havdalah_minutes):
-                _log(f"door {'closed' if contact else 'opened'}; Shabbat/Yom Tov, leaving {DEVICE} alone")
+                _log(f"door {door}; Shabbat/Yom Tov, leaving {DEVICE} alone")
                 continue
-            r = subprocess.run(
-                [sys.executable, str(KASA_CLI), state, DEVICE], capture_output=True, text=True
-            )
-            out = (r.stdout + r.stderr).strip().splitlines()
-            _log(f"door {'closed' if contact else 'opened'} -> {DEVICE} {state}: {out[0] if out else r.returncode}")
+            note = await light.set(on=not contact)
+            _log(f"door {door} -> {DEVICE} {'off' if contact else 'on'}: {note}")
     finally:
-        sub.terminate()
+        if sub.returncode is None:
+            sub.terminate()
+
+
+async def run(zip_code: str, havdalah_minutes: int) -> None:
+    light = Light()
+    try:
+        await light._connect()  # warm up, so the first door event is fast too
+    except ConnectionError as ex:
+        _log(f"couldn't pre-connect to {DEVICE} ({ex}); will retry on first event")
+    while True:  # mosquitto_sub exits if the container restarts; resubscribe
+        await listen(zip_code, havdalah_minutes, light)
+        _log("subscription ended; reconnecting in 10s")
+        await asyncio.sleep(10)
 
 
 def main() -> None:
@@ -115,10 +168,7 @@ def main() -> None:
         return  # already running
 
     _log("started")
-    while True:  # mosquitto_sub exits if the container restarts; resubscribe
-        listen(args.zip, args.havdalah_minutes)
-        _log("subscription ended; reconnecting in 10s")
-        time.sleep(10)
+    asyncio.run(run(args.zip, args.havdalah_minutes))
 
 
 if __name__ == "__main__":
