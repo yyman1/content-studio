@@ -337,7 +337,15 @@ Not yet verified against a real Yom Tov transition end-to-end via cron
 `ecobee_yomtov.log` and `ecobee_yomtov_cron.log` (no tracebacks) after
 it's had a chance to run through that.
 
-## Door sensor project — in progress, not built yet
+## Door sensor project — built (2026-09-25); plan below kept for history
+
+**Status:** built, but not the way the plan below describes. Mosquitto and
+Zigbee2MQTT run as Docker containers in `~/zigbee` (not apt or
+/opt/zigbee2mqtt), with the dongle's adapter set to `ember`. The Aqara
+MCCGQ11LM paired as "Door Sensor". The listener is `closet_door_light.py`
+(see its section below). It uses `mosquitto_sub` in the container rather
+than paho-mqtt. The open Shabbat question is answered: the household chose
+to pause it from candle-lighting to havdalah.
 
 Household wants a door-open -> light-on trigger. Decided against Tapo's
 own T110/H100 (proprietary hub, would be a second closed ecosystem) and
