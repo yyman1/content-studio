@@ -245,6 +245,43 @@ during a scan on 2026-09-20 but was fine one-at-a-time -- that was parallel
 connections colliding with cron, not the stale-credential gotcha; don't scan
 devices in parallel while cron is running.
 
+## Master Bathroom switch replaced (2026-09-25)
+
+The Master Bathroom HS200 was replaced by a Tapo S505D(US) at .110 (the
+HS200 now lives in Yaakov's closet as "Yaakov Closet", .147). The new
+switch first advertised `encrypt_type: TPAP`, which no python-kasa version
+supports (`UnsupportedDeviceError`). **Turning on Tapo Lab -> Third-Party
+Compatibility (gotcha #4) switched it to a supported protocol.** It then
+hit gotcha #1: a password reset fixed it, but knocked 9 other devices out
+of sync for a while. Watch for `encrypt_type TPAP` on any new Tapo device.
+Also, because `discover --save` merges (gotcha #3), a replaced device's
+old entry keeps pointing at the old IP until the new one is found. The
+rule was briefly commented out and is restored now.
+
+Since it's dimmable, its 11pm off became dim-to-10% with `off_at_sunrise`,
+including the night after havdalah. `_havdalah_desired()` now handles
+dimmable rules for that. Also added "SL Closet" (S505D, .111): on 1h
+before candle-lighting and 1h before havdalah, off 11pm, and 9-11am on
+Shabbat/Yom Tov days. It isn't in
+schedule_email's `GROUPS` yet, so it shows under "OTHER".
+
+## Yaakov Closet door light — `closet_door_light.py` (2026-09-25)
+
+The Aqara "Door Sensor" (Zigbee2MQTT, ~/zigbee) drives "Yaakov Closet":
+open -> on, closed -> off. It's paused from candle-lighting to havdalah
+(strict span, no 1h lead), so on Shabbat/Yom Tov the door does nothing.
+It's a long-running `mosquitto_sub` listener, not a poller. Cron starts it
+every 5 min and a lock in `.secrets/` makes the extras exit, so it
+recovers from crashes and reboots within 5 minutes (no sudo on this Pi for
+a system service, and no linger for a user one). The baseline door state
+comes from `~/zigbee/z2m-data/state.json`, so a restart neither flips the
+light nor swallows the next event. Log: `closet_door_light.log`.
+`door_sensor_test.py` is the earlier test harness it grew from.
+
+```
+*/5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_door_light.py --zip 07666 --havdalah-minutes 42 >> closet_door_light_cron.log 2>&1
+```
+
 ## Yom Tov thermostat automation — status
 
 The household asked to "replicate the Shabbat schedule on Yom Tov" so

@@ -78,7 +78,7 @@ class DeviceRule:
     off_at_sunrise: bool = False  # after dimming, fully off at the next sunrise
     yomtov_on: Optional[time] = None  # daytime on trigger (any Shabbat/Yom Tov day)
     yomtov_off: Optional[time] = None  # daytime off trigger (optional)
-    before_havdalah_hours: Optional[float] = None  # on N hours before havdalah, off at nightly_cutoff
+    before_havdalah_hours: Optional[float] = None  # on N hours before havdalah, off at nightly_cutoff (or dim at dim_at)
     sukkot_only: bool = False  # evening/nightly rules only apply during Sukkot
     on_brightness: Optional[int] = None  # every "on" is at this brightness % instead of full/last-used
     dimmable: bool = field(init=False, default=False)
@@ -126,14 +126,18 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     ),
     "Primary Lobby": DeviceRule(evening_start=True, relative_off_hours=2, relative_off_cap=_t("22:00")),
     "Master Bathroom": DeviceRule(
-        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2,
-        yomtov_on=_t("08:00"), yomtov_off=_t("12:00"),
+        evening_start=True, dim_at=_t("23:00"), dim_pct=10, off_at_sunrise=True,
+        before_havdalah_hours=2, yomtov_on=_t("08:00"), yomtov_off=_t("12:00"),
     ),
     # Overnight-only per household confirmation: no Yom Tov daytime behavior.
     "Master Bathroom Toilet": DeviceRule(
         evening_start=True, dim_at=_t("23:00"), dim_pct=15, off_at_sunrise=True
     ),
     # "Blanket": do nothing -- omitted.
+    "SL Closet": DeviceRule(
+        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=1,
+        yomtov_on=_t("09:00"), yomtov_off=_t("11:00"),
+    ),
     # Kids bathroom
     "Bathroom Upstairs main": DeviceRule(
         evening_start=True, dim_at=_t("23:00"), dim_pct=10, yomtov_on=_t("07:00")
@@ -274,6 +278,13 @@ def _havdalah_desired(rule: DeviceRule, now: datetime, events: jc.Events) -> Opt
         on_dt = havdalah - timedelta(hours=rule.before_havdalah_hours)
         if now < on_dt:
             continue
+        if rule.dimmable:
+            dim_at_dt = datetime.combine(havdalah.date(), rule.dim_at, tzinfo=havdalah.tzinfo)
+            if now < dim_at_dt:
+                return "on"
+            if rule.off_at_sunrise and now >= jc.sunrise(_ZIP, havdalah.date() + timedelta(days=1)):
+                continue
+            return f"dim:{rule.dim_pct}"
         if rule.nightly_cutoff is not None:
             cutoff_dt = datetime.combine(havdalah.date(), rule.nightly_cutoff, tzinfo=havdalah.tzinfo)
             if now >= cutoff_dt:
