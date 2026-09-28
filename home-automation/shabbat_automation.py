@@ -125,9 +125,11 @@ DEVICE_RULES: dict[str, DeviceRule] = {
         yomtov_on=_t("09:30"), yomtov_off=_t("14:00"),
     ),
     "Primary Lobby": DeviceRule(evening_start=True, relative_off_hours=2, relative_off_cap=_t("22:00")),
+    # Fully off at 11pm (not dimmed). on_brightness=100 so an "on" never
+    # resumes at the 10% left over from when this rule used to dim.
     "Master Bathroom": DeviceRule(
-        evening_start=True, dim_at=_t("23:00"), dim_pct=10, off_at_sunrise=True,
-        before_havdalah_hours=2, yomtov_on=_t("08:00"), yomtov_off=_t("12:00"),
+        evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=2,
+        yomtov_on=_t("08:00"), yomtov_off=_t("12:00"), on_brightness=100,
     ),
     # Overnight-only per household confirmation: no Yom Tov daytime behavior.
     "Master Bathroom Toilet": DeviceRule(

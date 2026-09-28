@@ -258,9 +258,12 @@ Also, because `discover --save` merges (gotcha #3), a replaced device's
 old entry keeps pointing at the old IP until the new one is found. The
 rule was briefly commented out and is restored now.
 
-Since it's dimmable, its 11pm off became dim-to-10% with `off_at_sunrise`,
-including the night after havdalah. `_havdalah_desired()` now handles
-dimmable rules for that. Also added "SL Closet" (S505D, .111): on 1h
+Since it's dimmable, its 11pm off briefly became dim-to-10% with
+`off_at_sunrise` (`_havdalah_desired()` handles dimmable rules for that).
+On 2026-09-28 the household asked for a full off at 11pm again (and on at
+8am on Shabbat/Yom Tov days, off at noon as before), so it's back to
+`nightly_cutoff=23:00` with `on_brightness=100` so it never comes on at the
+old 10%. Also added "SL Closet" (S505D, .111): on 1h
 before candle-lighting and 1h before havdalah, off 11pm, and 9-11am on
 Shabbat/Yom Tov days. It isn't in
 schedule_email's `GROUPS` yet, so it shows under "OTHER".
