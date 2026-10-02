@@ -289,6 +289,32 @@ line records the latency. Log: `closet_door_light.log`.
 */5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_door_light.py --zip 07666 --havdalah-minutes 42 >> closet_door_light_cron.log 2>&1
 ```
 
+## Blanket schedule — `blanket_schedule.py` (2026-10-02)
+
+"Blanket " (KP115 plug, .157) turns on at 9pm Friday and 10pm other nights,
+and off at 11:30pm, every night including Shabbat/Yom Tov. On Shabbat/Yom
+Tov days (14:00 inside a span) it's also on 2-4pm. An "on" is skipped if
+Open-Meteo says it's 68F or warmer outside at that moment. That's checked
+once per event. If the temperature lookup fails, it goes on anyway.
+It fires events like `led_schedule.py` does, with state in
+`.secrets/blanket_state.json` and the log in `blanket_schedule.log`.
+Test with `--now ISO --dry-run`.
+
+```
+*/5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 blanket_schedule.py --zip 07666 --havdalah-minutes 42 >> blanket_schedule_cron.log 2>&1
+```
+
+## One-time cool -> heat switch — `ecobee_heat_switch.py` (2026-10-02)
+
+Starting at `NOT_BEFORE` (Sat 2026-10-03 16:00), it switches "Bedroom" and
+"Main Floor" from cool to heat. Each thermostat switches once, the first
+time its indoor temperature reads 69F or below. Only `hvacMode` changes.
+Switches are recorded in `.secrets/heat_switch_state.json`, so a manual
+change back to cool afterwards sticks. Once both have switched, every run
+is a no-op and the cron line can be removed. It runs at 5-55/10 to stay
+off ecobee_yomtov's */10 minutes, so the two don't refresh the rotating
+token at the same moment.
+
 ## Yom Tov thermostat automation — status
 
 The household asked to "replicate the Shabbat schedule on Yom Tov" so
