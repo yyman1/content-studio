@@ -466,8 +466,8 @@ easily once the household says which they want.
 
 "Yaakov Closet" and "SL Closet" turn off after being on for 15 minutes,
 however they were turned on (door sensor, wall switch, app). Cron runs it
-every minute. The first run that sees a closet on records the time in
-`.secrets/closet_auto_off_state.json`, so the light goes off 15-16 minutes
+every 5 minutes. The first run that sees a closet on records the time in
+`.secrets/closet_auto_off_state.json`, so the light goes off 15-20 minutes
 later. Seeing the light off clears that entry. It's paused during the Shabbat
 regime (1h before candle-lighting through havdalah, via
 `wa.in_shabbat_regime`), so SL Closet's Shabbat windows still work. The
@@ -476,5 +476,5 @@ light is due to go off. If no calendar is available, the light stays on.
 Log: `closet_auto_off.log`. To test, monkeypatch `is_on` and pass `--now ISO --dry-run`.
 
 ```
-* * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_auto_off.py --zip 07666 --havdalah-minutes 42 >> closet_auto_off_cron.log 2>&1
+*/5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_auto_off.py --zip 07666 --havdalah-minutes 42 >> closet_auto_off_cron.log 2>&1
 ```

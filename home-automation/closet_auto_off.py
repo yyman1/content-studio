@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Turn the closet lights off after they've been on for 15 minutes.
 
-Run from cron every minute. Each run checks whether each device in
+Run from cron every 5 minutes. Each run checks whether each device in
 CLOSETS is on. The first run that sees a closet on records the time in
 .secrets/closet_auto_off_state.json. Once it has been on for AUTO_OFF
-(so 15-16 minutes, given the 1-minute cron), the light is turned off.
+(so 15-20 minutes, given the 5-minute cron), the light is turned off.
 A run that finds it off clears the entry.
 
 Paused from 1h before candle-lighting until havdalah (weekday_automation's
