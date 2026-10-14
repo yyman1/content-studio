@@ -264,7 +264,7 @@ On 2026-09-28 the household asked for a full off at 11pm again (and on at
 8am on Shabbat/Yom Tov days, off at noon as before), so it's back to
 `nightly_cutoff=23:00` with `on_brightness=100` so it never comes on at the
 old 10%. Also added "SL Closet" (S505D, .111): on 1h
-before candle-lighting and 1h before havdalah, off 11pm, and 9-11am on
+before candle-lighting and 1h before havdalah, off 11pm, and 9am-noon on
 Shabbat/Yom Tov days. It isn't in
 schedule_email's `GROUPS` yet, so it shows under "OTHER".
 
@@ -295,6 +295,7 @@ An Aqara motion sensor (Zigbee, IEEE 0xb40e060fffe8484b, Z2M name "Motion Sensor
 drives "Bathroom Upstairs Main" and "Bathroom Mirror" lights: motion detected (occupancy=true)
 -> both lights on; no motion (occupancy=false) -> both off. Paused from
 candle-lighting to havdalah, so on Shabbat/Yom Tov the sensor does nothing.
+It also never turns the lights on between 11pm and 6am (`in_quiet_hours`).
 
 Same architecture as `closet_door_light.py`: long-running `mosquitto_sub` listener
 with python-kasa connections kept open between events for fast response (~0.1s).

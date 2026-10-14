@@ -138,7 +138,7 @@ DEVICE_RULES: dict[str, DeviceRule] = {
     # "Blanket": do nothing -- omitted.
     "SL Closet": DeviceRule(
         evening_start=True, nightly_cutoff=_t("23:00"), before_havdalah_hours=1,
-        yomtov_on=_t("09:00"), yomtov_off=_t("11:00"),
+        yomtov_on=_t("09:00"), yomtov_off=_t("12:00"),
     ),
     # Kids bathroom
     "Bathroom Upstairs main": DeviceRule(

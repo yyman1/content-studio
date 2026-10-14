@@ -18,6 +18,7 @@ Usage:
     python kasa_cli.py toggle <name-or-ip> [--child <alias-or-id>]
     python kasa_cli.py brightness <name-or-ip> <0-100> [--child <alias-or-id>]
     python kasa_cli.py fade <name-or-ip> [--levels 75,50,25,10] [--duration 10] [--step-up-delay 0.3]
+    python kasa_cli.py led <name-or-ip> on|off   # the switch's status LED
 
 Run `discover --save` once (with devices powered on and connected to your
 Wi-Fi) to build a name -> IP map in .secrets/kasa_devices.json, so later
@@ -176,17 +177,23 @@ async def _connect(host: str, username: Optional[str], password: Optional[str]) 
     if username and password:
         kwargs["username"] = username
         kwargs["password"] = password
-    try:
-        dev = await Discover.discover_single(host, **kwargs)
-        await dev.update()
-    except Exception as ex:  # noqa: BLE001
-        hint = (
-            "" if (username and password) else
-            " Run `python kasa_cli.py login` if this device needs TP-Link "
-            "account credentials."
-        )
-        raise SystemExit(f"Couldn't reach/query {host}: {ex}.{hint}") from ex
-    return dev
+    # About half the switches fail the first KLAP handshake after sitting idle
+    # ("Server response doesn't match our challenge") and succeed right after,
+    # so retry once before giving up.
+    for attempt in range(2):
+        try:
+            dev = await Discover.discover_single(host, **kwargs)
+            await dev.update()
+            return dev
+        except Exception as ex:  # noqa: BLE001
+            if attempt == 0:
+                continue
+            hint = (
+                "" if (username and password) else
+                " Run `python kasa_cli.py login` if this device needs TP-Link "
+                "account credentials."
+            )
+            raise SystemExit(f"Couldn't reach/query {host}: {ex}.{hint}") from ex
 
 
 def _find_child(dev: Device, child_ref: str):
@@ -312,6 +319,24 @@ def cmd_fade(args: argparse.Namespace) -> None:
     asyncio.run(_fade(host, username, password, args.child, levels, args.duration, args.step_up_delay))
 
 
+async def _set_led(host: str, username, password, on: bool) -> str:
+    dev = await _connect(host, username, password)
+    if Module.Led not in dev.modules:
+        raise SystemExit(f"{dev.alias!r} has no controllable status LED.")
+    await dev.modules[Module.Led].set_led(on)
+    await dev.update()
+    if dev.modules[Module.Led].led != on:
+        raise SystemExit(f"{dev.alias!r} did not confirm LED on={on}.")
+    return dev.alias
+
+
+def cmd_led(args: argparse.Namespace) -> None:
+    username, password = _load_credentials()
+    host = _resolve_host(args.device)
+    alias = asyncio.run(_set_led(host, username, password, args.state == "on"))
+    print(f"Turned {alias!r} LED {args.state}.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -352,6 +377,11 @@ def main() -> None:
         help="Seconds to hold at each level on the quick step back up through --levels (reversed) to 100%%.",
     )
     p_fade.set_defaults(func=cmd_fade)
+
+    p_led = sub.add_parser("led", help="Turn a switch's status LED on or off.")
+    p_led.add_argument("device", help="Saved device name or IP address.")
+    p_led.add_argument("state", choices=["on", "off"])
+    p_led.set_defaults(func=cmd_led)
 
     args = parser.parse_args()
     args.func(args)
