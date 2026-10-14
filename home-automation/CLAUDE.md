@@ -289,6 +289,23 @@ line records the latency. Log: `closet_door_light.log`.
 */5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_door_light.py --zip 07666 --havdalah-minutes 42 >> closet_door_light_cron.log 2>&1
 ```
 
+## Bathroom motion sensor — `motion_sensor_bathroom.py` (2026-10-08)
+
+An Aqara motion sensor (Zigbee, IEEE 0xb40e060fffe8484b, Z2M name "Motion Sensor")
+drives "Bathroom Upstairs Main" and "Bathroom Mirror" lights: motion detected (occupancy=true)
+-> both lights on; no motion (occupancy=false) -> both off. Paused from
+candle-lighting to havdalah, so on Shabbat/Yom Tov the sensor does nothing.
+
+Same architecture as `closet_door_light.py`: long-running `mosquitto_sub` listener
+with python-kasa connections kept open between events for fast response (~0.1s).
+Lock file in `.secrets/` ensures only one instance runs; cron restarts it every
+5 min to recover from crashes/reboots. Baseline occupancy comes from
+`~/zigbee/z2m-data/state.json`. Logs latency per light. Log: `motion_sensor_bathroom.log`.
+
+```
+*/5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 motion_sensor_bathroom.py --zip 07666 --havdalah-minutes 42 >> motion_sensor_bathroom_cron.log 2>&1
+```
+
 ## Blanket schedule — `blanket_schedule.py` (2026-10-02)
 
 "Blanket " (KP115 plug, .157) turns on at 9pm Friday and 10pm other nights,
@@ -443,3 +460,20 @@ easily once the household says which they want.
 - Python venv at `./venv` — always `source venv/bin/activate` first.
 - Commit and push real progress the same way prior work in this repo
   has been committed (see `git log` for message style/tone).
+
+## Closet auto-off — `closet_auto_off.py` (2026-10-13)
+
+"Yaakov Closet" and "SL Closet" turn off after being on for 15 minutes,
+however they were turned on (door sensor, wall switch, app). Cron runs it
+every minute. The first run that sees a closet on records the time in
+`.secrets/closet_auto_off_state.json`, so the light goes off 15-16 minutes
+later. Seeing the light off clears that entry. It's paused during the Shabbat
+regime (1h before candle-lighting through havdalah, via
+`wa.in_shabbat_regime`), so SL Closet's Shabbat windows still work. The
+calendar comes from weekday_automation's 6h cache and is only checked when a
+light is due to go off. If no calendar is available, the light stays on.
+Log: `closet_auto_off.log`. To test, monkeypatch `is_on` and pass `--now ISO --dry-run`.
+
+```
+* * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_auto_off.py --zip 07666 --havdalah-minutes 42 >> closet_auto_off_cron.log 2>&1
+```
