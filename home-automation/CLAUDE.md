@@ -478,3 +478,24 @@ Log: `closet_auto_off.log`. To test, monkeypatch `is_on` and pass `--now ISO --d
 ```
 */5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 closet_auto_off.py --zip 07666 --havdalah-minutes 42 >> closet_auto_off_cron.log 2>&1
 ```
+
+## Zigbee health check — `zigbee_health_check.py` (2026-10-16)
+
+The motion sensor dropped off the Zigbee network on 2026-10-12 with no
+error or leave event, and nobody noticed for four days (the bathroom lights
+just stayed on). The sensors check in by themselves even with no activity
+(motion about every 10 min, door about hourly), so this works when nobody's
+home. Once a day it reads each device's `lastSeen` from
+`~/zigbee/z2m-data/database.db` and, if any is more than 3 hours old, emails
+yerlichman@gmail.com via `claude -p` + Gmail (reuses
+`schedule_email._send_via_claude`). It sends at most once a day (marker
+`.secrets/zigbee_health_check_sent.json`) and skips Shabbat/Yom Tov, so the
+next weekday run catches it. It can't report a Pi that's down or offline,
+or an expired Claude login. Fix for a dropped sensor: reseat the batteries,
+and if that doesn't work, re-pair (Permit join, hold the button about 5s).
+Note: Z2M's log timestamps are UTC, not local time.
+
+```
+0 9 * * *  cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 zigbee_health_check.py --zip 07666 --havdalah-minutes 42 --send >> zigbee_health_check_cron.log 2>&1
+20 9 * * * (same command -- retry, guarded by the sent marker)
+```
