@@ -70,6 +70,7 @@ LOOKFORWARD_HOURS = 3
 @dataclass
 class DeviceRule:
     evening_start: bool = False  # on from 1h before candle-lighting
+    evening_lead_minutes: int = 60  # ...or this many minutes before, instead of 1h
     nightly_cutoff: Optional[time] = None  # fixed off time same evening
     relative_off_hours: Optional[float] = None  # off N hours after candle-lighting
     relative_off_cap: Optional[time] = None  # ...but never later than this (same evening)
@@ -145,6 +146,11 @@ DEVICE_RULES: dict[str, DeviceRule] = {
         evening_start=True, dim_at=_t("23:00"), dim_pct=10, yomtov_on=_t("07:00")
     ),
     "Bathroom Mirror": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00")),
+    # Kitchen appliances
+    "Blech": DeviceRule(
+        evening_start=True, evening_lead_minutes=30, relative_off_hours=2.5,
+        yomtov_on=_t("10:00"), yomtov_off=_t("13:30"),
+    ),
     # Basement
     "Basement": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00"), yomtov_on=_t("10:00")),
     "Basement Playroom": DeviceRule(
@@ -208,7 +214,7 @@ def _evening_desired(rule: DeviceRule, now: datetime, candle: datetime, holidays
     if rule.sukkot_only and not _is_sukkot(candle.date(), holidays):
         return None
 
-    window_start = candle - timedelta(hours=1)
+    window_start = candle - timedelta(minutes=rule.evening_lead_minutes)
     if now < window_start:
         return None
 

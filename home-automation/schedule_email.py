@@ -53,6 +53,7 @@ GROUPS: list[tuple[str, list[str]]] = [
          "Bathroom First Floor", "Family Room"],
     ),
     ("MASTER BEDROOM / BATHROOMS", ["Main Bedroom", "Primary Lobby", "Master Bathroom", "Master Bathroom Toilet"]),
+    ("KITCHEN APPLIANCES", ["Blech"]),
     ("KIDS BATHROOM", ["Bathroom Upstairs main", "Bathroom Mirror"]),
     ("BASEMENT", ["Basement", "Basement Playroom"]),
     ("ENTRYWAYS / OUTDOOR", ["Back Porch Side Light", "Driveway Backyard / Side"]),
