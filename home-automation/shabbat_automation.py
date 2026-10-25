@@ -142,10 +142,12 @@ DEVICE_RULES: dict[str, DeviceRule] = {
         yomtov_on=_t("09:00"), yomtov_off=_t("12:00"),
     ),
     # Kids bathroom
+    # On at candle-lighting itself (not 1h before), when the motion sensor
+    # (motion_sensor_bathroom.py) stops controlling these two.
     "Bathroom Upstairs main": DeviceRule(
-        evening_start=True, dim_at=_t("23:00"), dim_pct=10, yomtov_on=_t("07:00")
+        evening_start=True, evening_lead_minutes=0, dim_at=_t("23:00"), dim_pct=10, yomtov_on=_t("07:00")
     ),
-    "Bathroom Mirror": DeviceRule(evening_start=True, nightly_cutoff=_t("23:00")),
+    "Bathroom Mirror": DeviceRule(evening_start=True, evening_lead_minutes=0, nightly_cutoff=_t("23:00")),
     # Kitchen appliances
     "Blech": DeviceRule(
         evening_start=True, evening_lead_minutes=30, relative_off_hours=2.5,
@@ -301,6 +303,16 @@ def _havdalah_desired(rule: DeviceRule, now: datetime, events: jc.Events) -> Opt
     return None
 
 
+def _before_own_evening_window(rule: DeviceRule, now: datetime, events: jc.Events, spans: list[jc.Span]) -> bool:
+    """True in the gap between the Shabbat regime starting (1h before
+    candle-lighting) and this device's own later evening start, before
+    Shabbat/Yom Tov itself has begun."""
+    if not rule.evening_start or any(s.start <= now < s.end for s in spans):
+        return False
+    lead = timedelta(minutes=rule.evening_lead_minutes)
+    return any(c - wd.REGIME_LEAD <= now < c - lead for c in events.candles)
+
+
 def desired_state(
     name: str, rule: DeviceRule, now: datetime, events: jc.Events, spans: list[jc.Span]
 ) -> str:
@@ -421,6 +433,11 @@ def run_once(
             if state.get(name) != wd.YIELD_STATE:
                 state[name] = wd.YIELD_STATE
                 handed_over = True
+            continue
+        # A weekday-scheduled device that starts later than 1h before
+        # candle-lighting stays with the weekday side (e.g. the bathroom
+        # motion sensor) until its own start; don't turn it off meanwhile.
+        if name in wd.WEEKDAY_RULES and _before_own_evening_window(rule, now, events, spans):
             continue
         desired = desired_state(name, rule, now, events, spans)
         previous = state.get(name)

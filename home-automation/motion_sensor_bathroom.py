@@ -3,7 +3,9 @@
 
 Motion detected (occupancy=true) -> lights on; no motion (occupancy=false) -> off.
 Paused from candle-lighting to havdalah (Shabbat and Yom Tov): the sensor
-does nothing, and the lights stay however they were left.
+does nothing, and the lights stay however they were left. An off-timer
+started before candle-lighting is dropped, not run, once Shabbat starts,
+and the lights are turned on at candle-lighting.
 
 Listens to Zigbee2MQTT via `mosquitto_sub` inside the `mosquitto`
 container (~/zigbee). Acts only when `occupancy` changes -- the motion
@@ -118,14 +120,47 @@ class Light:
         return f"direct failed ({err}); kasa_cli: {out[0] if out else r.returncode}"
 
 
-async def _schedule_lights_off(delay_seconds: int, lights: list[Light]) -> None:
-    """Turn off lights after delay, unless cancelled (motion detected again)."""
+async def _schedule_lights_off(
+    delay_seconds: int, lights: list[Light], zip_code: str, havdalah_minutes: int
+) -> None:
+    """Turn off lights after delay, unless cancelled (motion detected again).
+    A timer started before candle-lighting that runs out on Shabbat/Yom Tov
+    does nothing, so the lights stay on."""
     try:
         await asyncio.sleep(delay_seconds)
+        if in_shabbat(zip_code, havdalah_minutes):
+            _log("15-minute timeout on Shabbat/Yom Tov; leaving lights alone")
+            return
         results = await asyncio.gather(*(light.set(on=False) for light in lights))
         _log(f"15-minute timeout -> lights off: {', '.join(results)}")
     except asyncio.CancelledError:
         pass  # Task was cancelled because motion was detected again
+
+
+async def _lights_on_at_candle_lighting(zip_code: str, havdalah_minutes: int, lights: list[Light]) -> None:
+    """Turn the lights on at candle-lighting itself. shabbat_automation.py
+    turns them on too, but its cron runs every 5 minutes, so up to 5 minutes
+    later."""
+    while True:
+        try:
+            events = wa.load_events(zip_code, havdalah_minutes)  # 6h disk cache
+            spans = jc.fetch_spans(zip_code, havdalah_minutes, events=events)
+        except Exception as ex:  # noqa: BLE001
+            _log(f"calendar unavailable ({type(ex).__name__}); candle-lighting check retries in 10 min")
+            await asyncio.sleep(600)
+            continue
+        now = datetime.now().astimezone()
+        upcoming = [s.start for s in spans if s.start > now]
+        if not upcoming:
+            await asyncio.sleep(3600)
+            continue
+        wait = (min(upcoming) - now).total_seconds()
+        if wait > 600:  # re-check every 10 min in case the calendar changes
+            await asyncio.sleep(600)
+            continue
+        await asyncio.sleep(wait + 1)
+        results = await asyncio.gather(*(light.set(on=True) for light in lights))
+        _log(f"candle-lighting -> lights on: {', '.join(results)}")
 
 
 async def listen(zip_code: str, havdalah_minutes: int, lights: list[Light]) -> None:
@@ -148,6 +183,9 @@ async def listen(zip_code: str, havdalah_minutes: int, lights: list[Light]) -> N
                 continue
             state = "detected" if occupancy else "cleared"
             if in_shabbat(zip_code, havdalah_minutes):
+                if off_task:  # a timer left over from before candle-lighting
+                    off_task.cancel()
+                    off_task = None
                 _log(f"motion {state}; Shabbat/Yom Tov, leaving lights alone")
                 continue
             if occupancy:  # Motion detected
@@ -164,7 +202,7 @@ async def listen(zip_code: str, havdalah_minutes: int, lights: list[Light]) -> N
                 # Schedule lights off after 15 minutes (900 seconds) if any are on
                 any_on = any(light.dev and light.dev.is_on for light in lights if light.dev)
                 if any_on or not lights[0].dev:  # Check if lights are on, or we haven't connected yet
-                    off_task = asyncio.create_task(_schedule_lights_off(900, lights))
+                    off_task = asyncio.create_task(_schedule_lights_off(900, lights, zip_code, havdalah_minutes))
                     _log(f"motion cleared -> lights will turn off in 15 minutes")
                 else:
                     _log(f"motion cleared; lights already off")
@@ -182,6 +220,7 @@ async def run(zip_code: str, havdalah_minutes: int) -> None:
             await light._connect()  # warm up, so the first event is fast too
         except ConnectionError as ex:
             _log(f"couldn't pre-connect to {light.device} ({ex}); will retry on first event")
+    asyncio.create_task(_lights_on_at_candle_lighting(zip_code, havdalah_minutes, lights))
     while True:  # mosquitto_sub exits if the container restarts; resubscribe
         await listen(zip_code, havdalah_minutes, lights)
         _log("subscription ended; reconnecting in 10s")
