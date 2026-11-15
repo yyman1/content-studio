@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Email a warning if a Zigbee sensor has gone quiet.
+"""Email a warning if a Zigbee sensor has gone quiet or a Kasa/Tapo device is down.
 
 The sensors check in on their own even when nothing happens (the motion
 sensor about every 10 minutes, the door sensor about hourly), so a long
@@ -11,6 +11,12 @@ Run from cron once a day (plus a retry). Each run reads every device's
 STALE_AFTER, sends one email (at most one per day) through Claude Code's
 Gmail connector, the same way schedule_email.py does. Skipped from
 candle-lighting to havdalah; the next weekday run catches it.
+
+The same email also covers Kasa/Tapo switches and plugs (kasa_health.py):
+any scheduled device that doesn't answer right now, or whose recent
+scheduled switches all failed. The Blech plug went offline around
+2026-10-30 and missed three Shabbatot unnoticed; the Friday-morning run
+now flags that before candle-lighting.
 
 Usage:
     python3 zigbee_health_check.py --zip 07666 --print   # show status; don't send
@@ -26,6 +32,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import kasa_health
 from motion_sensor_bathroom import in_shabbat
 from schedule_email import _send_via_claude
 
@@ -81,26 +88,59 @@ def main() -> int:
     except (OSError, ValueError, KeyError) as ex:
         problems = [f"couldn't read Zigbee2MQTT's device database ({type(ex).__name__}: {ex})"]
 
+    # Shabbat check first when sending, so the Kasa probe never runs then.
+    if args.send and not args.print_ and in_shabbat(args.zip, args.havdalah_minutes):
+        return 0
+    try:
+        kasa_down = kasa_health.unreachable()
+    except Exception as ex:  # noqa: BLE001 -- report it rather than skip the Zigbee part
+        kasa_down = [f"couldn't run the check ({type(ex).__name__}: {ex})"]
+    kasa_failing = [
+        f for f in kasa_health.failing_in_logs(now)
+        if not any(d.startswith(f.split(":")[0] + " (") for d in kasa_down)
+    ]
+
     if args.print_ or not args.send:
         print("\n".join(problems) or "All Zigbee devices checked in recently.")
+        print("\n".join(kasa_down + kasa_failing) or "All scheduled Kasa/Tapo devices responding.")
         return 0
-    if not problems:
-        return 0
-    if in_shabbat(args.zip, args.havdalah_minutes):
+    if not (problems or kasa_down or kasa_failing):
         return 0
 
     today = now.date().isoformat()
     sent = json.loads(SENT_PATH.read_text()) if SENT_PATH.exists() else {}
     if today in sent:
         return 0  # the earlier run today already sent it
-    subject = "Zigbee sensor offline: " + ", ".join(p.split(":")[0] for p in problems)
-    body = (
-        "These Zigbee devices haven't checked in with the Pi for over "
-        f"{STALE_AFTER.seconds // 3600} hours, so automations that use them aren't working:\n\n"
-        + "\n".join(f"- {p}" for p in problems)
-        + "\n\nTo fix: reseat or replace the batteries. If it still doesn't come back, turn on "
-        "Permit join at http://192.168.97.194:8080 and hold the sensor's button until it blinks."
-    )
+    offline = [p.split(":")[0] for p in problems] + [d.split(" (")[0] for d in kasa_down] \
+        + [f.split(":")[0] for f in kasa_failing]
+    subject = "Device offline: " + ", ".join(offline)
+    sections = []
+    if problems:
+        sections.append(
+            "These Zigbee sensors haven't checked in with the Pi for over "
+            f"{STALE_AFTER.seconds // 3600} hours, so automations that use them aren't working:\n\n"
+            + "\n".join(f"- {p}" for p in problems)
+            + "\n\nTo fix: reseat or replace the batteries. If it still doesn't come back, turn on "
+            "Permit join at http://192.168.97.194:8080 and hold the sensor's button until it blinks."
+        )
+    if kasa_down:
+        sections.append(
+            "These Kasa/Tapo devices didn't answer the Pi (two tries, 30 seconds apart), "
+            "so their schedules won't run:\n\n"
+            + "\n".join(f"- {d}" for d in kasa_down)
+            + "\n\nTo fix: check it's plugged in and the outlet/breaker has power, then unplug it "
+            "for 10 seconds. If it still doesn't show up in the Kasa app, re-add it there. If it "
+            "came back on a new IP, run `venv/bin/python3 kasa_cli.py discover --save` on the Pi."
+        )
+    if kasa_failing:
+        sections.append(
+            "These answered just now, but their recent scheduled switches all failed:\n\n"
+            + "\n".join(f"- {f}" for f in kasa_failing)
+            + "\n\nIf it says \"Server response doesn't match our challenge\", see gotcha #1 in "
+            "CLAUDE.md (reset the TP-Link password)."
+        )
+    body = "\n\n".join(sections)
+    problems = problems + kasa_down + kasa_failing
     if _send_via_claude(subject, body):
         sent[today] = problems
         SENT_PATH.parent.mkdir(parents=True, exist_ok=True)

@@ -499,3 +499,23 @@ Note: Z2M's log timestamps are UTC, not local time.
 0 9 * * *  cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 zigbee_health_check.py --zip 07666 --havdalah-minutes 42 --send >> zigbee_health_check_cron.log 2>&1
 20 9 * * * (same command -- retry, guarded by the sent marker)
 ```
+
+## Kasa/Tapo device health — `kasa_health.py` (2026-11-14)
+
+The "Blech" plug (HS103, .125) dropped off the network around 2026-10-30
+and missed three Shabbatot. shabbat_automation.py retried every 5 minutes
+and logged `FAILED`, but nobody saw it. `zigbee_health_check.py`'s 9am run
+(and its 9:20 retry) now also calls `kasa_health.py`, and its one email a
+day covers both:
+- **Not responding now:** connects to every device any scheduler controls
+  (`scheduled_devices()` gathers names from DEVICE_RULES, WEEKDAY_RULES,
+  LED_DEVICES, CLOSETS, etc.). Probes run one at a time, never in parallel
+  (see the Mudroom Hallway note above), and a device is reported only if it
+  fails two tries 30s apart. Takes about a minute.
+- **Recent scheduled switches failing:** scans the scheduler logs for the
+  last 72h. A device is reported when its last 3+ logged results are all
+  `will retry next run` with no success since.
+It still skips Shabbat/Yom Tov, so the Friday and erev-Yom-Tov morning run
+is what catches a dead device before candle-lighting. Subject:
+"Device offline: <names>". Run `venv/bin/python3 kasa_health.py` (or
+`zigbee_health_check.py --zip 07666 --print`) to check by hand.
