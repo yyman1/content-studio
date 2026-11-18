@@ -519,3 +519,23 @@ It still skips Shabbat/Yom Tov, so the Friday and erev-Yom-Tov morning run
 is what catches a dead device before candle-lighting. Subject:
 "Device offline: <names>". Run `venv/bin/python3 kasa_health.py` (or
 `zigbee_health_check.py --zip 07666 --print`) to check by hand.
+
+## Pre-Shabbat Blech check — `pre_shabbat_check.py` (2026-11-18)
+
+The Blech (HS103) is only plugged in an hour or two before candle-lighting,
+so the 9am check would flag it every weekday. `kasa_health.PLUGGED_IN_BEFORE_SHABBAT`
+leaves it out of both daily checks (the probe and the log scan). Instead,
+`pre_shabbat_check.py` runs every 5 min. It does nothing except in the hour
+before the first candle-lighting of each span. In that hour it probes the
+Blech, and if it doesn't answer it runs `discover --save` and probes again.
+On 2026-11-18 it came back on a new IP (.119, was .125), which is why the
+rescan is there. If the Blech still doesn't answer, it emails once per span
+("Not connected before candle-lighting: Blech"). Later runs keep probing
+and rescanning without emailing again until it answers or candle-lighting
+arrives. State is in `.secrets/pre_shabbat_check_state.json` and the log is
+in `pre_shabbat_check.log`. To check by hand, run
+`venv/bin/python3 pre_shabbat_check.py --zip 07666 --now`.
+
+```
+*/5 * * * * cd /home/yerlichman/content-studio/home-automation && venv/bin/python3 pre_shabbat_check.py --zip 07666 --havdalah-minutes 42 >> pre_shabbat_check_cron.log 2>&1
+```

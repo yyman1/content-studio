@@ -5,7 +5,9 @@ The schedulers only notice a dead device when it's time to switch it, and
 then they just retry every 5 minutes and log the failure. The Blech plug
 dropped off the network around 2026-10-30 and missed three Shabbatot before
 anyone noticed. zigbee_health_check.py calls this every morning (including
-Friday, before Shabbat) and emails anything it reports.
+Friday, before Shabbat) and emails anything it reports. The Blech itself is
+left out of that (it's only plugged in before Shabbat); pre_shabbat_check.py
+checks it an hour before candle-lighting.
 
 Two checks:
   - unreachable(): connect to every device a scheduler controls, right now.
@@ -38,11 +40,16 @@ SCHEDULER_LOGS = [
     "blanket_schedule.log",
     "led_schedule.log",
 ]
+# Only plugged in an hour or two before candle-lighting, so a daily check
+# would flag it every weekday. pre_shabbat_check.py checks it an hour before
+# candle-lighting instead.
+PLUGGED_IN_BEFORE_SHABBAT = {"Blech"}
 _LINE = re.compile(r"^\[([0-9T:-]+)\] (?!\[dry-run\])([^:\[]+?): (.*)$")
 
 
 def scheduled_devices() -> list[str]:
-    """Every device name any scheduler controls (names stripped of stray spaces)."""
+    """Every device name any scheduler controls (names stripped of stray spaces),
+    minus PLUGGED_IN_BEFORE_SHABBAT."""
     import blanket_schedule, closet_auto_off, closet_door_light, led_schedule
     import motion_sensor_bathroom, shabbat_automation, weekday_automation
 
@@ -52,7 +59,7 @@ def scheduled_devices() -> list[str]:
         | set(motion_sensor_bathroom.DEVICES)
         | {blanket_schedule.DEVICE, closet_door_light.DEVICE}
     )
-    return sorted({n.strip() for n in names})
+    return sorted({n.strip() for n in names} - PLUGGED_IN_BEFORE_SHABBAT)
 
 
 async def _probe(host: str, user, password) -> str | None:
@@ -128,6 +135,8 @@ def failing_in_logs(now: datetime) -> list[str]:
             if ts < since:
                 continue
             name, text = m.group(2).strip(), m.group(3)
+            if name in PLUGGED_IN_BEFORE_SHABBAT:
+                continue
             if "retrying in" in text or name.startswith(("Done", "Hebcal", "outside")):
                 continue  # mid-run retry notes and non-device lines
             if "will retry next run" in text:

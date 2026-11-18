@@ -14,9 +14,9 @@ candle-lighting to havdalah; the next weekday run catches it.
 
 The same email also covers Kasa/Tapo switches and plugs (kasa_health.py):
 any scheduled device that doesn't answer right now, or whose recent
-scheduled switches all failed. The Blech plug went offline around
-2026-10-30 and missed three Shabbatot unnoticed; the Friday-morning run
-now flags that before candle-lighting.
+scheduled switches all failed. The Blech is left out (it's only plugged
+in before Shabbat); pre_shabbat_check.py checks it an hour before
+candle-lighting instead.
 
 Usage:
     python3 zigbee_health_check.py --zip 07666 --print   # show status; don't send
